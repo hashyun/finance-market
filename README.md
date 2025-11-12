@@ -824,13 +824,16 @@ KRX API → 시장 데이터 (시세, 외국인/기관 매매 등)
 
 ### 1. KRX API 클라이언트
 
-KRX와 네이버 금융 API를 활용하여 실시간 시세 및 투자자별 매매 동향을 조회합니다.
+KRX 정보데이터시스템과 DART의 공식 API를 직접 사용하여 시세 및 투자자별 매매 동향을 조회합니다.
 
 ```python
 from src.api.krx_client import KRXAPIClient
 
 # KRX API 클라이언트 초기화
-api_client = KRXAPIClient(position_file="data/my_positions.json")
+api_client = KRXAPIClient(
+    position_file="data/my_positions.json",
+    dart_api_key="your-dart-api-key"  # 선택사항
+)
 api_client.connect()
 
 # 실시간 시세 조회
@@ -843,13 +846,29 @@ print(f"기관 순매수: {market_data.institution_net:,}주")
 # 여러 종목 일괄 조회
 tickers = ['005930', '000660', '035420']
 market_data_batch = api_client.get_market_data_batch(tickers)
+
+# 투자자별 매매 동향 (기간 합산)
+investor_flow = api_client.get_investor_flow('005930', days=20)
 ```
 
 #### 데이터 소스
 
-- **KRX (한국거래소)**: 공식 시장 데이터
-- **네이버 금융 API**: 실시간 시세, 투자자별 매매 동향
+- **KRX 정보데이터시스템 (data.krx.co.kr)**: 공식 시장 데이터
+  - 개별 종목 시세 (OHLCV)
+  - 투자자별 매매 동향 (외국인/기관/개인)
+- **DART (opendart.fss.or.kr)**: 기업 정보 (선택사항)
+  - API 키 발급: https://opendart.fss.or.kr/
 - **포지션 파일**: 사용자가 직접 관리하는 보유 종목 정보
+
+#### KRX API 엔드포인트
+
+본 시스템은 다음 KRX API를 직접 호출합니다:
+
+1. **개별종목 시세** (`MDCSTAT01501`)
+   - 종가, 시가, 고가, 저가, 거래량
+
+2. **투자자별 매매동향** (`MDCSTAT02203`)
+   - 외국인, 기관, 개인 순매수량
 
 ### 2. 포지션 파일 관리
 
@@ -1273,10 +1292,13 @@ for name, file in portfolios.items():
 
 ### 10. 참고 자료
 
-#### KRX 데이터 출처
+#### API 및 데이터 출처
 - **KRX 정보데이터시스템**: http://data.krx.co.kr
-- **네이버 금융**: https://finance.naver.com
-- **금융감독원 전자공시**: https://dart.fss.or.kr
+  - 개별 종목 시세, 투자자별 매매 동향
+  - 별도 인증 불필요 (공개 API)
+- **DART (전자공시시스템)**: https://opendart.fss.or.kr
+  - 기업 재무정보, 공시정보
+  - API 키 발급 필요 (무료)
 
 #### 증권사별 매매 방법
 - 각 증권사 HTS/MTS 매뉴얼 참고
