@@ -472,3 +472,338 @@ TradingData(
 3. 슬리피지, 유동성 리스크 등을 고려해야 합니다
 4. 적절한 리스크 관리가 필수적입니다
 
+
+---
+
+## 실시간 트레이딩 시스템
+
+### 1. 실시간 데이터 연동
+
+#### API 클라이언트
+
+모든 증권사 API에 대응할 수 있는 추상 인터페이스를 제공합니다.
+
+```python
+from src.api.base_client import BaseAPIClient
+
+class YourAPIClient(BaseAPIClient):
+    """실제 증권사 API 구현"""
+    
+    def connect(self) -> bool:
+        # API 연결 로직
+        pass
+    
+    def get_market_data(self, ticker: str):
+        # 실시간 시세 조회
+        pass
+```
+
+#### Mock API (테스트용)
+
+실제 API 없이도 시스템을 테스트할 수 있습니다.
+
+```python
+from src.api.mock_client import MockAPIClient
+
+# Mock API 초기화
+api_client = MockAPIClient(initial_balance=100_000_000)
+api_client.connect()
+
+# 실시간 시세 조회
+market_data = api_client.get_market_data('005930')
+print(f"삼성전자 현재가: {market_data.price:,.0f}원")
+print(f"외국인 순매수: {market_data.foreign_net:,}주")
+
+# 주문 실행
+from src.api.base_client import OrderRequest
+
+order = OrderRequest(
+    ticker='005930',
+    order_type='BUY',
+    quantity=10,
+    order_method='MARKET'
+)
+
+response = api_client.place_order(order)
+print(f"주문 결과: {response.status}")
+```
+
+### 2. 자동 포트폴리오 리밸런싱
+
+#### 리밸런서 설정
+
+```python
+from src.rebalance.rebalancer import PortfolioRebalancer
+
+rebalancer = PortfolioRebalancer(
+    api_client=api_client,
+    strategy=your_strategy,
+    target_tickers=['005930', '000660', '035420'],
+    rebalance_threshold=0.05,      # 5% 이상 벗어나면 리밸런싱
+    min_trade_amount=100_000,      # 최소 거래 금액
+    max_position_size=0.4          # 최대 포지션 40%
+)
+```
+
+#### 리밸런싱 미리보기
+
+```python
+# 실제 주문 없이 리밸런싱 계획 확인
+preview = rebalancer.get_rebalancing_preview()
+
+print(f"리밸런싱 필요: {preview['needs_rebalancing']}")
+
+for ticker, info in preview['deviations'].items():
+    print(f"{ticker}: {info['current']:.1%} → {info['target']:.1%}")
+    print(f"  액션: {info['action']}")
+```
+
+#### 자동 리밸런싱 실행
+
+```python
+# 리밸런싱 체크 및 실행
+result = rebalancer.run_rebalancing_check()
+
+if result:
+    print(f"리밸런싱 완료: {result.message}")
+    print(f"실행된 주문: {len(result.orders_executed)}개")
+    
+    for order in result.orders_executed:
+        print(f"  {order['order_type']}: {order['ticker']} "
+              f"{order['quantity']}주 @ {order['price']:,.0f}원")
+```
+
+#### 리밸런싱 트리거 조건
+
+1. **비중 이탈**: 목표 비중에서 임계값 이상 벗어남
+2. **시장 조건 변화**: 전략 점수 변화
+3. **수동 트리거**: 사용자가 직접 실행
+
+### 3. 실시간 알림 시스템
+
+#### 알림 설정
+
+```python
+from src.notification.notifier import Notifier, NotificationLevel
+from src.notification.channels import ConsoleChannel, FileChannel
+
+# 알림 시스템 초기화
+notifier = Notifier()
+
+# 채널 추가
+notifier.add_channel(ConsoleChannel(colored=True))
+notifier.add_channel(FileChannel(log_file="logs/trading.log"))
+```
+
+#### 알림 전송
+
+```python
+# 정보 알림
+notifier.info("시스템 시작", "트레이딩 시스템이 시작되었습니다.")
+
+# 경고 알림
+notifier.warning("리밸런싱 필요", "포트폴리오 비중이 목표에서 벗어났습니다.")
+
+# 중요 알림
+notifier.alert("매수 신호", "삼성전자 매수 신호 발생", {'ticker': '005930', 'price': 70000})
+
+# 오류 알림
+notifier.error("주문 실패", "잔고 부족으로 주문이 실패했습니다.")
+```
+
+#### 알림 채널
+
+##### 콘솔 출력
+```python
+from src.notification.channels import ConsoleChannel
+
+# 컬러 출력 지원
+console_channel = ConsoleChannel(colored=True)
+notifier.add_channel(console_channel)
+```
+
+##### 파일 로깅
+```python
+from src.notification.channels import FileChannel
+
+# 파일에 로그 저장
+file_channel = FileChannel(log_file="logs/trading.log")
+notifier.add_channel(file_channel)
+```
+
+##### 이메일 (확장 가능)
+```python
+from src.notification.channels import EmailChannel
+
+# 이메일 알림 (SMTP 설정 필요)
+email_channel = EmailChannel(
+    smtp_server="smtp.gmail.com",
+    recipient="your@email.com"
+)
+notifier.add_channel(email_channel)
+```
+
+##### Slack (확장 가능)
+```python
+from src.notification.channels import SlackChannel
+
+# Slack 웹훅
+slack_channel = SlackChannel(webhook_url="your-webhook-url")
+notifier.add_channel(slack_channel)
+```
+
+#### 알림 히스토리
+
+```python
+# 전체 알림 조회
+all_notifications = notifier.get_history(limit=100)
+
+# 특정 레벨만 조회
+errors = notifier.get_history(level=NotificationLevel.ERROR, limit=50)
+alerts = notifier.get_history(level=NotificationLevel.ALERT, limit=50)
+```
+
+### 4. 통합 실시간 트레이딩 예제
+
+모든 기능을 통합한 실시간 트레이딩 시스템:
+
+```bash
+python examples/realtime_trading_example.py
+```
+
+#### 시스템 흐름
+
+1. **API 연결**: Mock API 또는 실제 API 연결
+2. **알림 시스템 초기화**: 여러 채널 설정
+3. **전략 설정**: 외국인 수급 + 모멘텀 전략
+4. **대상 종목 설정**: 리밸런싱 대상 종목 지정
+5. **초기 포트폴리오 구성**: 목표 비중에 맞춰 매수
+6. **실시간 모니터링**: 
+   - 실시간 시세 조회
+   - 리밸런싱 필요 여부 확인
+   - 자동 리밸런싱 실행
+   - 알림 전송
+7. **최종 결과 출력**: 성과 분석
+
+#### 실행 예제
+
+```python
+from src.api.mock_client import MockAPIClient
+from src.strategies.multi_strategy import MultiStrategy
+from src.rebalance.rebalancer import PortfolioRebalancer
+from src.notification.notifier import Notifier
+
+# 1. API 초기화
+api_client = MockAPIClient(initial_balance=100_000_000)
+api_client.connect()
+
+# 2. 알림 설정
+notifier = Notifier()
+notifier.add_channel(ConsoleChannel(colored=True))
+
+# 3. 전략 설정
+strategy = MultiStrategy([foreign_strategy, momentum_strategy], [0.6, 0.4])
+
+# 4. 리밸런서 설정
+rebalancer = PortfolioRebalancer(
+    api_client=api_client,
+    strategy=strategy,
+    target_tickers=['005930', '000660', '035420'],
+    rebalance_threshold=0.05
+)
+
+# 5. 실시간 모니터링 루프
+while True:
+    # 실시간 시세 조회
+    market_data = api_client.get_market_data_batch(target_tickers)
+    
+    # 리밸런싱 체크
+    result = rebalancer.run_rebalancing_check()
+    
+    if result and result.success:
+        notifier.alert("리밸런싱 완료", result.message)
+    
+    # 계좌 상태 확인
+    account = api_client.get_account_balance()
+    
+    time.sleep(check_interval)
+```
+
+## 실전 활용 시나리오
+
+### 시나리오 1: 외국인 매수 포착 자동 매매
+
+```python
+# 외국인 순매수 급증 감지
+market_data = api_client.get_market_data('005930')
+
+if market_data.foreign_net > 1_000_000:  # 100만주 이상 순매수
+    notifier.alert("외국인 매수 급증", f"삼성전자 외국인 순매수: {market_data.foreign_net:,}주")
+    
+    # 자동 매수
+    order = OrderRequest(ticker='005930', order_type='BUY', quantity=10)
+    response = api_client.place_order(order)
+```
+
+### 시나리오 2: 손절/익절 자동화
+
+```python
+holdings = api_client.get_holdings()
+
+for ticker, holding in holdings.items():
+    # 손절: -5% 이하
+    if holding['profit_loss_pct'] <= -5.0:
+        notifier.warning("손절 실행", f"{ticker} 손실률 {holding['profit_loss_pct']:.2f}%")
+        # 전량 매도
+        
+    # 익절: +10% 이상
+    elif holding['profit_loss_pct'] >= 10.0:
+        notifier.info("익절 실행", f"{ticker} 수익률 {holding['profit_loss_pct']:.2f}%")
+        # 일부 매도
+```
+
+### 시나리오 3: 일일 리밸런싱 스케줄링
+
+```python
+import schedule
+
+def daily_rebalancing():
+    """매일 장 시작 후 리밸런싱"""
+    result = rebalancer.run_rebalancing_check()
+    
+    if result:
+        notifier.alert("일일 리밸런싱", result.message)
+
+# 매일 오전 9시 10분 실행
+schedule.every().day.at("09:10").do(daily_rebalancing)
+
+while True:
+    schedule.run_pending()
+    time.sleep(60)
+```
+
+## 주의사항
+
+### 실시간 데이터 연동
+- API 호출 제한(Rate Limit)에 주의
+- 네트워크 장애 대응 필요
+- API 키 보안 관리 필수
+
+### 자동 리밸런싱
+- 과도한 리밸런싱은 수수료 증가
+- 시장 충격 최소화를 위한 분할 매매 고려
+- 장 마감 직전 리밸런싱 주의
+
+### 알림 시스템
+- 알림 스팸 방지 (중복 알림 필터링)
+- 중요도에 따른 채널 분리
+- 알림 히스토리 정기적 정리
+
+## 확장 가능성
+
+1. **실제 증권사 API 연동**: KIS API, eBest API 등
+2. **고급 주문 전략**: 분할 매매, 조건부 주문
+3. **머신러닝 통합**: 실시간 예측 모델
+4. **대시보드**: 웹 기반 실시간 모니터링
+5. **백업 시스템**: 이중화 및 장애 복구
+
