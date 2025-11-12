@@ -248,3 +248,227 @@ portfolio = optimizer.optimize_risk_aware(
 ## 면책 조항
 
 이 소프트웨어는 교육 및 연구 목적으로만 제공됩니다. 실제 투자에 사용하여 발생하는 손실에 대해 개발자는 책임지지 않습니다. 투자 결정은 본인의 판단과 책임하에 이루어져야 합니다.
+
+---
+
+## 알고리즘 트레이딩 (한국 시장 특화)
+
+### 한국 시장 특화 기능
+
+#### 1. 투자자별 수급 분석
+- **외국인 매매**: 외국인 순매수/매도 추적
+- **기관 매매**: 기관 투자자 동향 분석
+- **개인 매매**: 개인 투자자 흐름 파악
+- **프로그램 매매**: 알고리즘 매매 감지
+- **투자자 컨센서스**: 외국인+기관 일치도 분석
+
+#### 2. 한국 시장 지표
+- **공매도 분석**: 공매도 비율 및 숏 스퀴즈 가능성
+- **신용잔고**: 신용거래 동향
+- **거래대금 회전율**: 유동성 지표
+- **코스피/코스닥 구분**: 시장별 특성 반영
+
+#### 3. 트레이딩 전략
+
+##### 외국인 수급 추종 전략
+외국인과 기관의 매수세가 강한 종목을 선택합니다.
+
+```python
+from src.strategies.foreign_follow import ForeignFollowStrategy
+
+strategy = ForeignFollowStrategy(
+    buy_threshold=30.0,
+    sell_threshold=-30.0
+)
+```
+
+**특징:**
+- 외국인 + 기관 컨센서스 분석
+- 프로그램 매매 신호 통합
+- 대형 우량주에 효과적
+
+##### 모멘텀 전략
+가격 상승 추세가 강한 종목을 매수합니다.
+
+```python
+from src.strategies.momentum import MomentumStrategy
+
+strategy = MomentumStrategy(
+    rsi_buy_max=70,
+    rsi_sell_min=30
+)
+```
+
+**특징:**
+- 이동평균 정배열 확인
+- RSI, MACD 종합 판단
+- 중소형 성장주에 효과적
+
+##### 평균회귀 전략
+과매도 구간에서 매수, 과매수 구간에서 매도합니다.
+
+```python
+from src.strategies.mean_reversion import MeanReversionStrategy
+
+strategy = MeanReversionStrategy(
+    bb_lower_threshold=20,
+    bb_upper_threshold=80
+)
+```
+
+**특징:**
+- 볼린저 밴드 기반
+- 스토캐스틱, RSI 활용
+- 박스권 종목에 효과적
+
+##### 멀티 전략 (복합 전략)
+여러 전략을 조합하여 사용합니다.
+
+```python
+from src.strategies.multi_strategy import MultiStrategy
+
+multi_strategy = MultiStrategy(
+    strategies=[foreign_strategy, momentum_strategy, reversion_strategy],
+    weights=[0.5, 0.3, 0.2]
+)
+```
+
+### 백테스팅
+
+전략의 과거 성과를 검증합니다.
+
+```python
+from src.backtest.backtester import Backtester
+
+backtester = Backtester(
+    initial_capital=100_000_000,  # 1억원
+    commission_rate=0.00015,      # 수수료 0.015%
+    tax_rate=0.0023,              # 거래세 0.23%
+    max_position_size=0.3         # 최대 포지션 30%
+)
+
+result = backtester.run(
+    stocks=stocks,
+    strategy=strategy,
+    rebalance_period=5  # 5일마다 리밸런싱
+)
+
+print(f"수익률: {result.total_return_pct:.2f}%")
+print(f"승률: {result.win_rate:.2f}%")
+print(f"샤프 비율: {result.sharpe_ratio:.2f}")
+print(f"최대 낙폭: {result.max_drawdown:.2f}%")
+```
+
+### 알고리즘 트레이딩 예제 실행
+
+```bash
+python examples/algo_trading_example.py
+```
+
+이 예제는 다음을 수행합니다:
+1. 한국 시장 샘플 데이터 생성 (외국인/기관 매매 포함)
+2. 개별 종목 수급 분석
+3. 여러 전략의 매매 신호 생성
+4. 백테스팅을 통한 전략 성과 비교
+5. 투자자 유형별 전략 추천
+
+### 실전 활용 팁
+
+#### 강한 매수 신호
+- 외국인 + 기관 동시 순매수
+- 이동평균 정배열 + RSI 50 이상
+- 프로그램 매수 급증
+
+#### 저점 매수 기회
+- 외국인 지속 매수 + 가격 하락
+- RSI 과매도 (30 이하) + 볼린저 밴드 하단
+- 공매도 비율 높고 외국인 매수
+
+#### 고점 매도 신호
+- 외국인 + 기관 동시 순매도
+- RSI 과매수 (70 이상) + 볼린저 밴드 상단
+- 프로그램 매도 급증
+
+#### 숏 스퀴즈 포착
+- 공매도 비율 10% 이상
+- 외국인/기관 순매수 전환
+- 급격한 거래량 증가
+
+## 프로젝트 구조 (전체)
+
+```
+finance-market/
+├── src/
+│   ├── models/
+│   │   ├── stock.py                  # 기본 Stock, Portfolio 클래스
+│   │   └── korean_stock.py           # 한국 시장 특화 데이터 모델
+│   ├── risk/
+│   │   ├── market_risk.py            # 시장 위험 분석
+│   │   ├── credit_risk.py            # 신용 위험 분석
+│   │   └── liquidity_risk.py         # 유동성 위험 분석
+│   ├── portfolio/
+│   │   └── optimizer.py              # 포트폴리오 최적화
+│   ├── analysis/
+│   │   ├── investor_flow.py          # 투자자 수급 분석
+│   │   └── market_indicators.py      # 기술적 지표
+│   ├── strategies/
+│   │   ├── base_strategy.py          # 전략 베이스 클래스
+│   │   ├── foreign_follow.py         # 외국인 수급 추종
+│   │   ├── momentum.py               # 모멘텀 전략
+│   │   ├── mean_reversion.py         # 평균회귀 전략
+│   │   └── multi_strategy.py         # 멀티 전략
+│   ├── backtest/
+│   │   └── backtester.py             # 백테스팅 엔진
+│   └── utils/
+│       ├── data_loader.py            # 데이터 로딩
+│       └── data_generator.py         # 샘플 데이터 생성
+├── examples/
+│   ├── portfolio_example.py          # 포트폴리오 최적화 예제
+│   └── algo_trading_example.py       # 알고리즘 트레이딩 예제
+├── data/
+│   └── sample_stocks.json            # 샘플 데이터
+├── requirements.txt
+└── README.md
+```
+
+## 한국 시장 데이터 형식
+
+한국 시장 특화 데이터는 다음 정보를 포함합니다:
+
+```python
+TradingData(
+    date="2024-01-01",
+    open=70000,
+    high=71000,
+    low=69500,
+    close=70500,
+    volume=15000000,
+    # 한국 시장 특화
+    foreign_buy=2000000,       # 외국인 매수량
+    foreign_sell=1500000,      # 외국인 매도량
+    institution_buy=1000000,   # 기관 매수량
+    institution_sell=800000,   # 기관 매도량
+    individual_buy=5000000,    # 개인 매수량
+    individual_sell=5700000,   # 개인 매도량
+    program_buy=3000000,       # 프로그램 매수량
+    program_sell=2800000,      # 프로그램 매도량
+    short_sell_volume=500000,  # 공매도 거래량
+    short_balance=2000000,     # 공매도 잔고
+    credit_balance=150.5       # 신용잔고 (억원)
+)
+```
+
+## 참고 자료
+
+### 한국 시장 특성
+- **외국인 투자자**: 대형주 선호, 장기 투자 성향
+- **기관 투자자**: 중기 트렌드 추종, 테마 투자
+- **개인 투자자**: 단기 매매, 역발상 투자
+- **프로그램 매매**: 차익거래, 비차익거래 구분
+
+### 투자 유의사항
+1. 과거 데이터는 미래를 보장하지 않습니다
+2. 백테스팅 결과와 실전 결과는 다를 수 있습니다
+3. 슬리피지, 유동성 리스크 등을 고려해야 합니다
+4. 적절한 리스크 관리가 필수적입니다
+
