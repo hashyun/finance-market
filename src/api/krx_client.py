@@ -1,9 +1,10 @@
 """
 KRX (한국거래소) API 클라이언트
-FinanceDataReader 라이브러리를 사용하여 실제 시장 데이터를 가져옵니다
+로컬 CSV 파일 또는 FinanceDataReader를 사용하여 시장 데이터를 가져옵니다
 """
 import json
 import os
+import pandas as pd
 from typing import Dict, List, Optional
 from datetime import datetime, timedelta
 from .base_client import BaseAPIClient, MarketData, OrderRequest, OrderResponse
@@ -11,45 +12,48 @@ from .base_client import BaseAPIClient, MarketData, OrderRequest, OrderResponse
 
 class KRXAPIClient(BaseAPIClient):
     """
-    KRX API 클라이언트 (FinanceDataReader 기반)
-    - 실제 KRX 데이터를 FinanceDataReader로 가져오기
+    KRX API 클라이언트
+    - 로컬 CSV 파일 우선 사용
+    - FinanceDataReader 대체 사용
     - 포지션은 파일로 관리 (수동 매매)
     """
 
     def __init__(
         self,
         position_file: str = "data/my_positions.json",
-        dart_api_key: Optional[str] = None
+        dart_api_key: Optional[str] = None,
+        data_dir: str = "data/market_data"
     ):
         """
         Args:
             position_file: 포지션 정보 파일 경로
-            dart_api_key: DART API 키 (선택사항, 현재 미사용)
+            dart_api_key: DART API 키 (선택사항)
+            data_dir: 시세 데이터 CSV 디렉토리
         """
         self.position_file = position_file
         self.dart_api_key = dart_api_key or self._load_env_variable('DART_API_KEY')
+        self.data_dir = data_dir
         self.positions = {}
         self.is_connected = False
 
-        # FinanceDataReader import
+        # CSV 데이터 캐시
+        self.price_cache = {}
+
+        # FinanceDataReader (선택사항)
         try:
             import FinanceDataReader as fdr
             self.fdr = fdr
             self.fdr_available = True
         except ImportError:
-            print("⚠️  FinanceDataReader가 설치되어 있지 않습니다.")
-            print("   설치: pip install finance-datareader")
             self.fdr = None
             self.fdr_available = False
 
     def _load_env_variable(self, key: str) -> Optional[str]:
         """환경변수 또는 .env 파일에서 값 읽기"""
-        # 환경변수 확인
         value = os.environ.get(key)
         if value:
             return value
 
-        # .env 파일 확인
         env_file = '.env'
         if os.path.exists(env_file):
             try:
@@ -71,9 +75,8 @@ class KRXAPIClient(BaseAPIClient):
         """API 연결 및 포지션 파일 로드"""
         print("KRX API 연결 중...")
 
-        if not self.fdr_available:
-            print("❌ FinanceDataReader를 설치해주세요: pip install finance-datareader")
-            return
+        # 데이터 디렉토리 생성
+        os.makedirs(self.data_dir, exist_ok=True)
 
         # 포지션 파일 로드
         try:
@@ -105,9 +108,38 @@ class KRXAPIClient(BaseAPIClient):
         market_close = now.replace(hour=15, minute=30, second=0, microsecond=0)
         return market_open <= now <= market_close
 
+    def _load_csv_data(self, ticker: str) -> Optional[pd.DataFrame]:
+        """로컬 CSV 파일에서 데이터 로드"""
+        csv_file = os.path.join(self.data_dir, f"{ticker}.csv")
+
+        if not os.path.exists(csv_file):
+            return None
+
+        try:
+            df = pd.read_csv(csv_file, parse_dates=['Date'], index_col='Date')
+            return df
+        except Exception as e:
+            print(f"⚠️  CSV 파일 읽기 오류 ({ticker}): {e}")
+            return None
+
+    def _get_latest_price_from_csv(self, ticker: str) -> Optional[Dict]:
+        """CSV에서 최신 시세 조회"""
+        df = self._load_csv_data(ticker)
+
+        if df is None or df.empty:
+            return None
+
+        latest = df.iloc[-1]
+
+        return {
+            'close': float(latest.get('Close', latest.get('close', 0))),
+            'volume': int(latest.get('Volume', latest.get('volume', 0))),
+            'date': df.index[-1]
+        }
+
     def get_market_data(self, ticker: str) -> Optional[MarketData]:
         """
-        실시간 시세 조회 (FinanceDataReader 사용)
+        시세 조회 (CSV 우선, FinanceDataReader 대체)
 
         Args:
             ticker: 종목코드
@@ -115,49 +147,79 @@ class KRXAPIClient(BaseAPIClient):
         Returns:
             시장 데이터
         """
-        if not self.fdr_available:
-            print(f"❌ FinanceDataReader가 설치되지 않아 시세를 조회할 수 없습니다.")
-            return None
+        # 캐시 확인
+        if ticker in self.price_cache:
+            cache_time, data = self.price_cache[ticker]
+            # 5분 이내 캐시는 재사용
+            if (datetime.now() - cache_time).seconds < 300:
+                return data
 
-        try:
-            # 최근 30거래일 데이터 조회 (휴장일 대응)
-            end_date = datetime.now()
-            start_date = end_date - timedelta(days=40)
+        # 1. CSV 파일에서 조회
+        csv_data = self._get_latest_price_from_csv(ticker)
 
-            # FinanceDataReader로 데이터 조회
-            df = self.fdr.DataReader(ticker, start_date, end_date)
-
-            if df.empty:
-                print(f"⚠️  {ticker}: 데이터를 찾을 수 없습니다")
-                return None
-
-            # 최근 데이터
-            latest = df.iloc[-1]
-
-            # 투자자별 매매 데이터는 별도 조회 필요 (현재는 0으로 설정)
-            # FinanceDataReader는 기본적으로 OHLCV만 제공
-            return MarketData(
+        if csv_data:
+            market_data = MarketData(
                 ticker=ticker,
                 timestamp=datetime.now().isoformat(),
-                price=float(latest['Close']),
-                volume=int(latest['Volume']),
+                price=csv_data['close'],
+                open=csv_data['close'],  # CSV에 없으면 종가로 대체
+                high=csv_data['close'],
+                low=csv_data['close'],
+                volume=csv_data['volume'],
                 foreign_buy=0,
                 foreign_sell=0,
-                foreign_net=0,
                 institution_buy=0,
                 institution_sell=0,
-                institution_net=0,
                 individual_buy=0,
                 individual_sell=0,
-                individual_net=0,
                 program_buy=0,
                 program_sell=0,
-                program_net=0
+                short_sell_volume=0
             )
 
-        except Exception as e:
-            print(f"❌ 시세 조회 오류 ({ticker}): {e}")
-            return None
+            # 캐시 저장
+            self.price_cache[ticker] = (datetime.now(), market_data)
+            return market_data
+
+        # 2. FinanceDataReader 시도
+        if self.fdr_available:
+            try:
+                end_date = datetime.now()
+                start_date = end_date - timedelta(days=40)
+
+                df = self.fdr.DataReader(ticker, start_date, end_date)
+
+                if not df.empty:
+                    latest = df.iloc[-1]
+
+                    market_data = MarketData(
+                        ticker=ticker,
+                        timestamp=datetime.now().isoformat(),
+                        price=float(latest['Close']),
+                        open=float(latest.get('Open', latest['Close'])),
+                        high=float(latest.get('High', latest['Close'])),
+                        low=float(latest.get('Low', latest['Close'])),
+                        volume=int(latest['Volume']),
+                        foreign_buy=0,
+                        foreign_sell=0,
+                        institution_buy=0,
+                        institution_sell=0,
+                        individual_buy=0,
+                        individual_sell=0,
+                        program_buy=0,
+                        program_sell=0,
+                        short_sell_volume=0
+                    )
+
+                    # 캐시 저장
+                    self.price_cache[ticker] = (datetime.now(), market_data)
+                    return market_data
+
+            except Exception as e:
+                print(f"⚠️  FinanceDataReader 조회 오류 ({ticker}): {e}")
+
+        print(f"⚠️  {ticker}: 시세를 조회할 수 없습니다 (CSV 파일 또는 API 데이터 필요)")
+        return None
 
     def get_market_data_batch(self, tickers: List[str]) -> Dict[str, MarketData]:
         """여러 종목 시세 일괄 조회"""
@@ -285,17 +347,7 @@ class KRXAPIClient(BaseAPIClient):
         return False
 
     def get_investor_flow(self, ticker: str, days: int = 20) -> Dict:
-        """
-        투자자별 매매 동향 조회 (FinanceDataReader는 기본 지원 안함)
-
-        Args:
-            ticker: 종목코드
-            days: 조회 일수
-
-        Returns:
-            투자자별 매매 동향 (현재는 빈 딕셔너리 반환)
-        """
-        print(f"ℹ️  투자자별 매매 동향은 FinanceDataReader에서 제공하지 않습니다.")
+        """투자자별 매매 동향 조회 (현재 미지원)"""
         return {}
 
     def update_position_file(self, positions: Dict):
@@ -312,3 +364,36 @@ class KRXAPIClient(BaseAPIClient):
     def save_positions(self):
         """현재 포지션을 파일에 저장"""
         self.update_position_file(self.positions)
+
+    def download_and_save_data(self, ticker: str, start_date: str = '2024-01-01', end_date: str = '2024-12-31'):
+        """
+        FinanceDataReader로 데이터 다운로드하여 CSV로 저장
+
+        Args:
+            ticker: 종목코드
+            start_date: 시작일 (YYYY-MM-DD)
+            end_date: 종료일 (YYYY-MM-DD)
+        """
+        if not self.fdr_available:
+            print("❌ FinanceDataReader가 설치되지 않았습니다.")
+            return False
+
+        try:
+            print(f"📥 {ticker} 데이터 다운로드 중...")
+
+            df = self.fdr.DataReader(ticker, start_date, end_date)
+
+            if df.empty:
+                print(f"❌ {ticker}: 데이터를 가져올 수 없습니다")
+                return False
+
+            # CSV로 저장
+            csv_file = os.path.join(self.data_dir, f"{ticker}.csv")
+            df.to_csv(csv_file)
+
+            print(f"✅ {ticker}: {len(df)}개 데이터 저장 완료 ({csv_file})")
+            return True
+
+        except Exception as e:
+            print(f"❌ {ticker} 다운로드 오류: {e}")
+            return False
