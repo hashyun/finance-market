@@ -1,8 +1,7 @@
 """
 KRX (한국거래소) API 클라이언트
-실제 시장 데이터를 가져오는 클라이언트
+pykrx 라이브러리를 사용하여 실제 시장 데이터를 가져옵니다
 """
-import requests
 import json
 from typing import Dict, List, Optional
 from datetime import datetime, timedelta
@@ -12,8 +11,7 @@ from .base_client import BaseAPIClient, MarketData, OrderRequest, OrderResponse
 class KRXAPIClient(BaseAPIClient):
     """
     KRX API 클라이언트
-    - KRX에서 시장 데이터 가져오기
-    - 네이버/다음 금융 API 활용 (보조)
+    - pykrx로 실제 KRX 데이터 가져오기
     - 포지션은 파일로 관리 (수동 매매)
     """
 
@@ -25,32 +23,41 @@ class KRXAPIClient(BaseAPIClient):
         self.position_file = position_file
         self.positions = {}
         self.is_connected = False
+        self.pykrx_available = False
 
-        # KRX API 엔드포인트
-        self.krx_base_url = "http://data.krx.co.kr"
-
-        # 네이버 금융 API (시세 조회용)
-        self.naver_finance_url = "https://m.stock.naver.com/api"
+        # pykrx import 시도
+        try:
+            from pykrx import stock
+            self.stock = stock
+            self.pykrx_available = True
+        except ImportError:
+            print("⚠️  pykrx가 설치되어 있지 않습니다.")
+            print("   설치: pip install pykrx")
+            self.stock = None
 
     def connect(self):
         """API 연결 및 포지션 파일 로드"""
         print("KRX API 연결 중...")
 
+        if not self.pykrx_available:
+            print("❌ pykrx를 설치해주세요: pip install pykrx")
+            return
+
         # 포지션 파일 로드
         try:
             with open(self.position_file, 'r', encoding='utf-8') as f:
                 self.positions = json.load(f)
-            print(f"포지션 파일 로드 완료: {len(self.positions)}개 종목")
+            print(f"✅ 포지션 파일 로드 완료: {len(self.positions.get('holdings', {}))}개 종목")
         except FileNotFoundError:
-            print(f"포지션 파일이 없습니다: {self.position_file}")
-            print("빈 포지션으로 시작합니다.")
-            self.positions = {}
+            print(f"⚠️  포지션 파일이 없습니다: {self.position_file}")
+            print("   빈 포지션으로 시작합니다.")
+            self.positions = {"cash": 0, "holdings": {}}
         except json.JSONDecodeError:
-            print(f"포지션 파일 형식 오류: {self.position_file}")
-            self.positions = {}
+            print(f"❌ 포지션 파일 형식 오류: {self.position_file}")
+            self.positions = {"cash": 0, "holdings": {}}
 
         self.is_connected = True
-        print("연결 완료")
+        print("✅ 연결 완료")
 
     def disconnect(self):
         """연결 해제"""
@@ -66,14 +73,14 @@ class KRXAPIClient(BaseAPIClient):
             return False
 
         # 평일 9:00 ~ 15:30
-        market_open = now.replace(hour=9, minute=0, second=0)
-        market_close = now.replace(hour=15, minute=30, second=0)
+        market_open = now.replace(hour=9, minute=0, second=0, microsecond=0)
+        market_close = now.replace(hour=15, minute=30, second=0, microsecond=0)
 
         return market_open <= now <= market_close
 
     def get_market_data(self, ticker: str) -> Optional[MarketData]:
         """
-        실시간 시세 조회 (네이버 금융 API 활용)
+        실시간 시세 조회 (pykrx 사용)
 
         Args:
             ticker: 종목코드
@@ -81,84 +88,78 @@ class KRXAPIClient(BaseAPIClient):
         Returns:
             시장 데이터
         """
-        try:
-            # 네이버 금융 API로 현재가 조회
-            url = f"{self.naver_finance_url}/stock/{ticker}/basic"
-            response = requests.get(url, timeout=5)
-
-            if response.status_code != 200:
-                print(f"시세 조회 실패: {ticker}")
-                return None
-
-            data = response.json()
-
-            # 투자자별 매매동향 조회 (별도 API)
-            investor_data = self._get_investor_trading(ticker)
-
-            return MarketData(
-                ticker=ticker,
-                timestamp=datetime.now().isoformat(),
-                price=float(data.get('closePrice', 0)),
-                volume=int(data.get('accumulatedTradingVolume', 0)),
-                foreign_buy=investor_data.get('foreign_buy', 0),
-                foreign_sell=investor_data.get('foreign_sell', 0),
-                foreign_net=investor_data.get('foreign_net', 0),
-                institution_buy=investor_data.get('institution_buy', 0),
-                institution_sell=investor_data.get('institution_sell', 0),
-                institution_net=investor_data.get('institution_net', 0),
-                individual_buy=investor_data.get('individual_buy', 0),
-                individual_sell=investor_data.get('individual_sell', 0),
-                individual_net=investor_data.get('individual_net', 0),
-                program_buy=0,  # 프로그램 매매는 KRX에서 별도 조회 필요
-                program_sell=0,
-                program_net=0
-            )
-
-        except Exception as e:
-            print(f"시세 조회 오류 ({ticker}): {e}")
+        if not self.pykrx_available:
+            print(f"❌ pykrx가 설치되지 않아 시세를 조회할 수 없습니다.")
             return None
 
-    def _get_investor_trading(self, ticker: str) -> Dict:
-        """
-        투자자별 매매동향 조회
-
-        Args:
-            ticker: 종목코드
-
-        Returns:
-            투자자별 매매 데이터
-        """
         try:
-            # 네이버 금융에서 투자자별 매매 데이터 조회
-            url = f"{self.naver_finance_url}/stock/{ticker}/investor"
-            response = requests.get(url, timeout=5)
+            # 오늘 날짜
+            today = datetime.now().strftime("%Y%m%d")
 
-            if response.status_code != 200:
-                return {}
+            # 가장 최근 거래일 찾기 (오늘이 휴장일 수 있음)
+            for i in range(10):  # 최대 10일 전까지 확인
+                date_str = (datetime.now() - timedelta(days=i)).strftime("%Y%m%d")
 
-            data = response.json()
+                try:
+                    # 일별 시세 조회
+                    df = self.stock.get_market_ohlcv_by_date(date_str, date_str, ticker)
 
-            # 최근 데이터 파싱
-            if not data or 'investorTrendList' not in data:
-                return {}
+                    if not df.empty:
+                        latest = df.iloc[-1]
 
-            recent = data['investorTrendList'][0] if data['investorTrendList'] else {}
+                        # 투자자별 매매동향 조회
+                        try:
+                            investor_df = self.stock.get_market_trading_value_by_date(
+                                date_str, date_str, ticker
+                            )
 
-            return {
-                'foreign_buy': int(recent.get('foreignBuyVolume', 0)),
-                'foreign_sell': int(recent.get('foreignSellVolume', 0)),
-                'foreign_net': int(recent.get('foreignNetVolume', 0)),
-                'institution_buy': int(recent.get('institutionBuyVolume', 0)),
-                'institution_sell': int(recent.get('institutionSellVolume', 0)),
-                'institution_net': int(recent.get('institutionNetVolume', 0)),
-                'individual_buy': int(recent.get('individualBuyVolume', 0)),
-                'individual_sell': int(recent.get('individualSellVolume', 0)),
-                'individual_net': int(recent.get('individualNetVolume', 0))
-            }
+                            if not investor_df.empty:
+                                investor_data = investor_df.iloc[-1]
+
+                                # pykrx는 거래대금으로 제공하므로 대략적인 수량 계산
+                                price = latest['종가']
+
+                                foreign_net = int(investor_data.get('외국인합계', 0) / price) if price > 0 else 0
+                                institution_net = int(investor_data.get('기관합계', 0) / price) if price > 0 else 0
+                                individual_net = int(investor_data.get('개인', 0) / price) if price > 0 else 0
+                            else:
+                                foreign_net = 0
+                                institution_net = 0
+                                individual_net = 0
+
+                        except Exception:
+                            foreign_net = 0
+                            institution_net = 0
+                            individual_net = 0
+
+                        return MarketData(
+                            ticker=ticker,
+                            timestamp=datetime.now().isoformat(),
+                            price=float(latest['종가']),
+                            volume=int(latest['거래량']),
+                            foreign_buy=max(0, foreign_net),
+                            foreign_sell=max(0, -foreign_net),
+                            foreign_net=foreign_net,
+                            institution_buy=max(0, institution_net),
+                            institution_sell=max(0, -institution_net),
+                            institution_net=institution_net,
+                            individual_buy=max(0, individual_net),
+                            individual_sell=max(0, -individual_net),
+                            individual_net=individual_net,
+                            program_buy=0,
+                            program_sell=0,
+                            program_net=0
+                        )
+
+                except Exception:
+                    continue
+
+            print(f"⚠️  {ticker}: 최근 거래 데이터를 찾을 수 없습니다")
+            return None
 
         except Exception as e:
-            print(f"투자자 매매동향 조회 오류: {e}")
-            return {}
+            print(f"❌ 시세 조회 오류 ({ticker}): {e}")
+            return None
 
     def get_market_data_batch(self, tickers: List[str]) -> Dict[str, MarketData]:
         """
@@ -172,10 +173,15 @@ class KRXAPIClient(BaseAPIClient):
         """
         result = {}
 
+        print(f"📊 {len(tickers)}개 종목 시세 조회 중...")
+
         for ticker in tickers:
             market_data = self.get_market_data(ticker)
             if market_data:
                 result[ticker] = market_data
+                print(f"  ✅ {ticker}: {market_data.price:,.0f}원")
+            else:
+                print(f"  ⚠️  {ticker}: 조회 실패")
 
         return result
 
@@ -186,7 +192,7 @@ class KRXAPIClient(BaseAPIClient):
         Returns:
             계좌 정보
         """
-        if not self.positions:
+        if not self.positions or 'holdings' not in self.positions:
             return {
                 'cash_balance': 0,
                 'stock_value': 0,
@@ -212,10 +218,10 @@ class KRXAPIClient(BaseAPIClient):
                 current_price = market_data.price
             else:
                 # 시세 조회 실패 시 평균단가 사용
-                current_price = position['avg_price']
+                current_price = position.get('avg_price', 0)
 
-            quantity = position['quantity']
-            avg_price = position['avg_price']
+            quantity = position.get('quantity', 0)
+            avg_price = position.get('avg_price', 0)
 
             stock_value += current_price * quantity
             total_cost += avg_price * quantity
@@ -253,10 +259,10 @@ class KRXAPIClient(BaseAPIClient):
             if market_data:
                 current_price = market_data.price
             else:
-                current_price = position['avg_price']
+                current_price = position.get('avg_price', 0)
 
-            quantity = position['quantity']
-            avg_price = position['avg_price']
+            quantity = position.get('quantity', 0)
+            avg_price = position.get('avg_price', 0)
 
             current_value = current_price * quantity
             cost = avg_price * quantity
@@ -313,6 +319,58 @@ class KRXAPIClient(BaseAPIClient):
             timestamp=datetime.now().isoformat()
         )
 
+    def cancel_order(self, order_id: str) -> bool:
+        """
+        주문 취소 (수동 매매이므로 지원하지 않음)
+
+        Args:
+            order_id: 주문 ID
+
+        Returns:
+            False (지원하지 않음)
+        """
+        print("⚠️  수동 매매 시스템은 주문 취소를 지원하지 않습니다.")
+        return False
+
+    def get_investor_flow(self, ticker: str, days: int = 20) -> Dict:
+        """
+        투자자별 매매 동향 조회
+
+        Args:
+            ticker: 종목코드
+            days: 조회 일수
+
+        Returns:
+            투자자별 매매 동향
+        """
+        if not self.pykrx_available:
+            return {}
+
+        try:
+            end_date = datetime.now().strftime("%Y%m%d")
+            start_date = (datetime.now() - timedelta(days=days)).strftime("%Y%m%d")
+
+            df = self.stock.get_market_trading_value_by_date(start_date, end_date, ticker)
+
+            if df.empty:
+                return {}
+
+            # 최근 데이터 합산
+            foreign_total = df['외국인합계'].sum()
+            institution_total = df['기관합계'].sum()
+            individual_total = df['개인'].sum()
+
+            return {
+                'foreign_net': foreign_total,
+                'institution_net': institution_total,
+                'individual_net': individual_total,
+                'days': days
+            }
+
+        except Exception as e:
+            print(f"투자자 매매 동향 조회 오류: {e}")
+            return {}
+
     def update_position_file(self, positions: Dict):
         """
         포지션 파일 업데이트
@@ -325,10 +383,28 @@ class KRXAPIClient(BaseAPIClient):
         try:
             with open(self.position_file, 'w', encoding='utf-8') as f:
                 json.dump(positions, f, ensure_ascii=False, indent=2)
-            print(f"포지션 파일 업데이트 완료: {self.position_file}")
+            print(f"✅ 포지션 파일 업데이트 완료: {self.position_file}")
         except Exception as e:
-            print(f"포지션 파일 업데이트 실패: {e}")
+            print(f"❌ 포지션 파일 업데이트 실패: {e}")
 
     def save_positions(self):
         """현재 포지션을 파일에 저장"""
         self.update_position_file(self.positions)
+
+    def get_ticker_name(self, ticker: str) -> str:
+        """
+        종목코드로 종목명 조회
+
+        Args:
+            ticker: 종목코드
+
+        Returns:
+            종목명
+        """
+        if not self.pykrx_available:
+            return ticker
+
+        try:
+            return self.stock.get_market_ticker_name(ticker)
+        except Exception:
+            return ticker
