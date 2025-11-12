@@ -4,6 +4,7 @@ pykrx 라이브러리를 사용하여 실제 KRX 데이터를 가져옵니다
 """
 import json
 import os
+import pandas as pd
 from typing import Dict, List, Optional
 from datetime import datetime, timedelta
 from .base_client import BaseAPIClient, MarketData, OrderRequest, OrderResponse
@@ -395,3 +396,184 @@ class KRXAPIClient(BaseAPIClient):
             return self.stock.get_market_ticker_name(ticker)
         except Exception:
             return ticker
+
+    def get_market_tickers(self, market: str = "KOSPI", date: str = None) -> List[str]:
+        """
+        KRX 시장의 전체 종목 리스트 조회
+
+        Args:
+            market: "KOSPI", "KOSDAQ", "KONEX", "ALL"
+            date: 조회 날짜 (YYYYMMDD, None이면 오늘)
+
+        Returns:
+            종목코드 리스트
+        """
+        if not self.pykrx_available:
+            print("❌ pykrx가 설치되지 않아 종목 리스트를 조회할 수 없습니다.")
+            return []
+
+        try:
+            if date is None:
+                date = datetime.now().strftime("%Y%m%d")
+
+            tickers = self.stock.get_market_ticker_list(date, market=market)
+            return list(tickers)
+        except Exception as e:
+            print(f"❌ 종목 리스트 조회 실패: {e}")
+            return []
+
+    def get_top_tickers_by_market_cap(
+        self,
+        top_n: int = 100,
+        market: str = "KOSPI",
+        date: str = None
+    ) -> List[str]:
+        """
+        시가총액 상위 N개 종목 조회
+
+        pykrx 오류 시 미리 정의된 대형주 리스트 반환
+
+        Args:
+            top_n: 상위 몇 개 종목
+            market: "KOSPI", "KOSDAQ", "ALL"
+            date: 조회 날짜 (YYYYMMDD, None이면 최근 거래일)
+
+        Returns:
+            종목코드 리스트 (시가총액 내림차순)
+        """
+        if not self.pykrx_available:
+            print("❌ pykrx가 설치되지 않아 시가총액 정보를 조회할 수 없습니다.")
+            return self._get_default_large_cap_tickers(market, top_n)
+
+        try:
+            if date is None:
+                # 최근 거래일 사용
+                date = datetime.now()
+                for _ in range(30):  # 최대 30일 전까지 확인 (휴일 고려)
+                    # 주말 건너뛰기
+                    if date.weekday() >= 5:
+                        date = date - pd.Timedelta(days=1)
+                        continue
+
+                    date_str = date.strftime("%Y%m%d")
+                    try:
+                        # 전체 종목 리스트로 시도 (더 안정적)
+                        tickers = self.stock.get_market_ticker_list(date_str, market=market)
+                        if tickers is not None and len(tickers) > 0:
+                            # 종목 리스트를 리스트로 변환하고 상위 N개 반환
+                            ticker_list = list(tickers)[:top_n]
+                            return ticker_list
+                    except Exception:
+                        pass
+                    date = date - pd.Timedelta(days=1)
+            else:
+                date_str = date
+                tickers = self.stock.get_market_ticker_list(date_str, market=market)
+                if tickers is not None and len(tickers) > 0:
+                    return list(tickers)[:top_n]
+
+            # 조회 실패 시 기본 대형주 리스트 사용
+            print(f"⚠️  pykrx 데이터 조회 실패, 미리 정의된 대형주 리스트 사용")
+            return self._get_default_large_cap_tickers(market, top_n)
+
+        except Exception as e:
+            print(f"⚠️  시가총액 상위 종목 조회 실패: {e}")
+            print(f"   미리 정의된 대형주 리스트 사용")
+            return self._get_default_large_cap_tickers(market, top_n)
+
+    def _get_default_large_cap_tickers(self, market: str, top_n: int) -> List[str]:
+        """
+        미리 정의된 대형주 종목 리스트 (pykrx 조회 실패 시 사용)
+
+        Args:
+            market: "KOSPI", "KOSDAQ", "ALL"
+            top_n: 반환할 종목 수
+
+        Returns:
+            종목코드 리스트
+        """
+        # KOSPI 시가총액 상위 종목 (2024년 기준)
+        kospi_large_caps = [
+            '005930',  # 삼성전자
+            '000660',  # SK하이닉스
+            '373220',  # LG에너지솔루션
+            '207940',  # 삼성바이오로직스
+            '005380',  # 현대차
+            '006400',  # 삼성SDI
+            '051910',  # LG화학
+            '005490',  # POSCO홀딩스
+            '035420',  # NAVER
+            '068270',  # 셀트리온
+            '012330',  # 현대모비스
+            '028260',  # 삼성물산
+            '035720',  # 카카오
+            '066570',  # LG전자
+            '003670',  # 포스코퓨처엠
+            '055550',  # 신한지주
+            '105560',  # KB금융
+            '032830',  # 삼성생명
+            '000270',  # 기아
+            '017670',  # SK텔레콤
+            '096770',  # SK이노베이션
+            '034020',  # 두산에너빌리티
+            '009150',  # 삼성전기
+            '018260',  # 삼성에스디에스
+            '086790',  # 하나금융지주
+            '033780',  # KT&G
+            '003550',  # LG
+            '030200',  # KT
+            '015760',  # 한국전력
+            '010130',  # 고려아연
+            '352820',  # 하이브
+            '011200',  # HMM
+            '000810',  # 삼성화재
+            '086280',  # 현대글로비스
+            '024110',  # 기업은행
+            '029780',  # 삼성카드
+            '000100',  # 유한양행
+            '010950',  # S-Oil
+            '047050',  # 포스코인터내셔널
+            '011070',  # LG이노텍
+            '009540',  # 현대중공업
+            '004020',  # 현대제철
+            '032640',  # LG유플러스
+            '001570',  # 금양
+            '009830',  # 한화솔루션
+            '011780',  # 금호석유
+            '047810',  # 한국항공우주
+            '028050',  # 삼성엔지니어링
+            '010140',  # 삼성중공업
+            '012450',  # 한화에어로스페이스
+        ]
+
+        # KOSDAQ 시가총액 상위 종목
+        kosdaq_large_caps = [
+            '247540',  # 에코프로비엠
+            '086520',  # 에코프로
+            '091990',  # 셀트리온헬스케어
+            '196170',  # 알테오젠
+            '112040',  # 위메이드
+            '357780',  # 솔브레인
+            '214450',  # 파마리서치
+            '293490',  # 카카오게임즈
+            '145020',  # 휴젤
+            '058470',  # 리노공업
+            '039030',  # 이오테크닉스
+            '278280',  # 천보
+            '403870',  # HPSP
+            '067160',  # 아프리카TV
+            '348210',  # 넥스틴
+            '365340',  # 성일하이텍
+            '141080',  # 레고켐바이오
+            '095340',  # ISC
+            '068760',  # 셀트리온제약
+            '108860',  # 셀바스AI
+        ]
+
+        if market.upper() == "KOSPI":
+            return kospi_large_caps[:top_n]
+        elif market.upper() == "KOSDAQ":
+            return kosdaq_large_caps[:top_n]
+        else:  # ALL
+            combined = kospi_large_caps + kosdaq_large_caps
+            return combined[:top_n]

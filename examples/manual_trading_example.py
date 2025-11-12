@@ -110,8 +110,28 @@ def main():
 
     print_section("5단계: 리밸런싱 분석 및 추천")
 
-    # 대상 종목 (포지션 파일의 종목들)
-    target_tickers = list(holdings.keys()) if holdings else ['005930', '000660', '035420']
+    # 대상 종목 확장: 시가총액 상위 종목 사용
+    print("\n종목 후보군 구성 중...")
+
+    # 옵션 1: 시가총액 상위 100개 (기본값)
+    top_n = 100
+    market = "KOSPI"  # "KOSPI", "KOSDAQ", "ALL" 중 선택
+
+    target_tickers = api_client.get_top_tickers_by_market_cap(top_n=top_n, market=market)
+
+    if not target_tickers:
+        # pykrx 실패 시 기본값 사용
+        print(f"⚠️  시가총액 상위 종목 조회 실패, 기본 종목 사용")
+        target_tickers = list(holdings.keys()) if holdings else ['005930', '000660', '035420']
+    else:
+        print(f"✅ {market} 시가총액 상위 {len(target_tickers)}개 종목으로 분석")
+
+        # 현재 보유 종목도 반드시 포함
+        if holdings:
+            for ticker in holdings.keys():
+                if ticker not in target_tickers:
+                    target_tickers.append(ticker)
+            print(f"   (보유 종목 {len(holdings)}개 포함)")
 
     # 어드바이저 초기화
     advisor = ManualTradingAdvisor(
