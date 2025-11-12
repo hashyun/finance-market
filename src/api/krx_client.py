@@ -36,9 +36,14 @@ class KRXAPIClient(BaseAPIClient):
             from pykrx import stock
             self.stock = stock
             self.pykrx_available = True
-        except ImportError:
-            print("❌ pykrx가 설치되어 있지 않습니다.")
+            print("✅ pykrx 로드 완료")
+        except ImportError as e:
+            print(f"❌ pykrx가 설치되어 있지 않습니다: {e}")
             print("   설치: pip install pykrx")
+            self.stock = None
+            self.pykrx_available = False
+        except Exception as e:
+            print(f"❌ pykrx 로드 중 오류 발생: {type(e).__name__}: {e}")
             self.stock = None
             self.pykrx_available = False
 
@@ -138,7 +143,7 @@ class KRXAPIClient(BaseAPIClient):
             df = self.stock.get_market_ohlcv_by_date(start_str, end_str, ticker)
 
             if df.empty:
-                print(f"⚠️  {ticker}: 데이터가 없습니다")
+                # print(f"⚠️  {ticker}: 조회 기간 {start_str}~{end_str}에 데이터가 없습니다")
                 return None
 
             # 최신 데이터
@@ -193,7 +198,8 @@ class KRXAPIClient(BaseAPIClient):
             return market_data
 
         except Exception as e:
-            print(f"❌ KRX 시세 조회 오류 ({ticker}): {e}")
+            # 네트워크 오류나 API 오류 발생 시
+            # print(f"⚠️  KRX API 오류 ({ticker}): {e}")
             return None
 
     def get_market_data_batch(self, tickers: List[str]) -> Dict[str, MarketData]:
