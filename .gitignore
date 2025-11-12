@@ -44,6 +44,7 @@ Thumbs.db
 *.xlsx
 *.xls
 !data/sample_stocks.json
+!data/market_data/*.csv
 logs/
 
 # Environment variables
