@@ -807,3 +807,485 @@ while True:
 4. **대시보드**: 웹 기반 실시간 모니터링
 5. **백업 시스템**: 이중화 및 장애 복구
 
+---
+
+## KRX API + 수동 매매 시스템
+
+증권사 API를 제공하지 않는 경우, KRX API로 시장 데이터를 가져오고 포지션을 수동으로 관리하는 방식입니다.
+
+### 시스템 구성
+
+```
+KRX API → 시장 데이터 (시세, 외국인/기관 매매 등)
+포지션 파일 → 보유 종목 정보 (수동 관리)
+어드바이저 → 리밸런싱 추천 (자동 분석)
+증권사 앱/HTS → 실제 매매 (수동 실행)
+```
+
+### 1. KRX API 클라이언트
+
+KRX와 네이버 금융 API를 활용하여 실시간 시세 및 투자자별 매매 동향을 조회합니다.
+
+```python
+from src.api.krx_client import KRXAPIClient
+
+# KRX API 클라이언트 초기화
+api_client = KRXAPIClient(position_file="data/my_positions.json")
+api_client.connect()
+
+# 실시간 시세 조회
+market_data = api_client.get_market_data('005930')  # 삼성전자
+
+print(f"현재가: {market_data.price:,.0f}원")
+print(f"외국인 순매수: {market_data.foreign_net:,}주")
+print(f"기관 순매수: {market_data.institution_net:,}주")
+
+# 여러 종목 일괄 조회
+tickers = ['005930', '000660', '035420']
+market_data_batch = api_client.get_market_data_batch(tickers)
+```
+
+#### 데이터 소스
+
+- **KRX (한국거래소)**: 공식 시장 데이터
+- **네이버 금융 API**: 실시간 시세, 투자자별 매매 동향
+- **포지션 파일**: 사용자가 직접 관리하는 보유 종목 정보
+
+### 2. 포지션 파일 관리
+
+#### 포지션 파일 형식 (data/my_positions.json)
+
+```json
+{
+  "cash": 50000000,
+  "holdings": {
+    "005930": {
+      "name": "삼성전자",
+      "quantity": 100,
+      "avg_price": 72000
+    },
+    "000660": {
+      "name": "SK하이닉스",
+      "quantity": 50,
+      "avg_price": 135000
+    },
+    "035420": {
+      "name": "NAVER",
+      "quantity": 30,
+      "avg_price": 230000
+    }
+  }
+}
+```
+
+#### 포지션 파일 업데이트 도구
+
+매매 후 포지션을 쉽게 업데이트할 수 있는 대화형 도구를 제공합니다.
+
+```bash
+python tools/update_positions.py
+```
+
+**기능:**
+- 현금 잔고 업데이트
+- 보유 종목 추가/수정/삭제
+- 매매 기록 (자동 계산)
+  - 매수: 평균단가 자동 재계산, 현금 차감
+  - 매도: 수량 차감, 현금 증가
+
+### 3. 리밸런싱 추천 시스템
+
+#### 어드바이저 초기화
+
+```python
+from src.advisor.manual_trading_advisor import ManualTradingAdvisor
+from src.strategies.multi_strategy import MultiStrategy
+
+# 전략 설정
+strategy = MultiStrategy([foreign_strategy, momentum_strategy], [0.6, 0.4])
+
+# 어드바이저 초기화
+advisor = ManualTradingAdvisor(
+    api_client=api_client,
+    strategy=strategy,
+    target_tickers=['005930', '000660', '035420'],
+    rebalance_threshold=0.05,  # 5% 이상 벗어나면 추천
+    min_trade_amount=100_000,
+    max_position_size=0.4
+)
+```
+
+#### 포트폴리오 분석
+
+```python
+# 포트폴리오 상태 분석
+analysis = advisor.get_portfolio_analysis()
+
+print(f"총 자산: {analysis['total_value']:,.0f}원")
+print(f"손익률: {analysis['profit_loss_pct']:.2f}%")
+print(f"리밸런싱 필요: {analysis['needs_rebalancing']}")
+
+# 현재 비중 vs 목표 비중
+for ticker in target_tickers:
+    current = analysis['current_weights'][ticker]
+    target = analysis['target_weights'][ticker]
+    deviation = analysis['deviations'][ticker]
+
+    print(f"{ticker}: {current:.1%} → {target:.1%} (차이: {deviation:+.1%})")
+```
+
+#### 매매 추천 받기
+
+```python
+# 매매 추천 생성
+recommendations = advisor.get_trading_recommendations()
+
+for rec in recommendations:
+    if rec.action == "BUY":
+        print(f"📈 매수: {rec.ticker}")
+        print(f"   수량: {rec.recommended_quantity:,}주")
+        print(f"   예상가: {rec.estimated_price:,.0f}원")
+        print(f"   예상금액: {rec.estimated_amount:,.0f}원")
+        print(f"   이유: {rec.reason}")
+
+    elif rec.action == "SELL":
+        print(f"📉 매도: {rec.ticker}")
+        print(f"   수량: {rec.recommended_quantity:,}주")
+        print(f"   예상가: {rec.estimated_price:,.0f}원")
+        print(f"   예상금액: {rec.estimated_amount:,.0f}원")
+        print(f"   이유: {rec.reason}")
+```
+
+#### 매매 가이드 출력
+
+```python
+# 전체 분석 및 매매 가이드 출력
+advisor.print_trading_guide()
+```
+
+출력 예시:
+```
+================================================================================
+  포트폴리오 분석 및 매매 가이드
+================================================================================
+
+[계좌 현황]
+  총 자산:          100,000,000원
+  현금 잔고:         50,000,000원
+  주식 평가액:       50,000,000원
+  손익:              +2,000,000원 (+4.17%)
+
+[포트폴리오 비중]
+  종목        현재비중      목표비중          차이        상태
+  ------------------------------------------------------------------------
+  005930         30.0%        33.3%        +3.3%    🔴 매수필요
+  000660         20.0%        33.3%       +13.3%    🔴 매수필요
+  035420         50.0%        33.3%       -16.7%    🔵 매도필요
+
+[매매 추천]
+  리밸런싱 필요: 예 (임계값: 5.0%)
+
+  📉 매도 추천:
+    • 035420: 15주 @ 230,000원
+      (예상 금액: 3,450,000원)
+      이유: 목표 비중(33.3%)보다 16.7%p 높음
+
+  📈 매수 추천:
+    • 005930: 15주 @ 72,000원
+      (예상 금액: 1,080,000원)
+      이유: 목표 비중(33.3%)보다 3.3%p 낮음
+
+    • 000660: 10주 @ 135,000원
+      (예상 금액: 1,350,000원)
+      이유: 목표 비중(33.3%)보다 13.3%p 낮음
+
+  💡 실행 순서:
+    1. 매도 주문을 먼저 실행하여 현금을 확보하세요
+    2. 매도 체결 후 매수 주문을 실행하세요
+    3. 주문 체결 후 포지션 파일을 업데이트하세요
+
+  총 매도 예상액:        3,450,000원
+  총 매수 예상액:        2,430,000원
+  순 현금 변동:          1,020,000원
+```
+
+#### 추천 파일로 저장
+
+```python
+# JSON 파일로 저장
+advisor.export_recommendations_to_file("data/trading_recommendations.json")
+```
+
+### 4. 실행 예제
+
+#### 수동 매매 예제 실행
+
+```bash
+python examples/manual_trading_example.py
+```
+
+**시스템 흐름:**
+1. 포지션 파일 로드
+2. KRX API 연결
+3. 현재 포트폴리오 상태 확인
+4. 전략 기반 리밸런싱 분석
+5. 매매 추천 생성 및 출력
+6. 추천 파일로 저장
+
+### 5. 실전 운영 가이드
+
+#### 일일 루틴
+
+**1. 장 시작 전 (9:00 이전)**
+```bash
+# 포트폴리오 분석 실행
+python examples/manual_trading_example.py
+```
+
+- 어제 매매 반영 확인
+- 포지션 파일 최신화
+- 오늘의 매매 전략 확인
+
+**2. 장 중 (9:00 ~ 15:30)**
+
+- 추천된 매매를 증권사 앱/HTS에서 실행
+- 시장 상황 모니터링
+- 급변 시 재분석 실행
+
+**3. 장 마감 후 (15:30 이후)**
+
+```bash
+# 포지션 업데이트
+python tools/update_positions.py
+```
+
+- 오늘 체결된 주문 반영
+- 보유 수량, 평균단가 업데이트
+- 현금 잔고 정리
+
+#### 매매 실행 팁
+
+**매수 시:**
+1. 추천 가격을 참고하되, HTS에서 최신 시세 확인
+2. 지정가 주문으로 슬리피지 최소화
+3. 분할 매수 고려 (대량 매수 시)
+
+**매도 시:**
+1. 매도부터 실행하여 현금 확보
+2. 급등/급락 시 시장가 대신 지정가 활용
+3. 시장 충격 최소화 (대량 매도 시)
+
+**포지션 업데이트:**
+1. 체결가 정확히 입력
+2. 평균단가는 도구가 자동 계산
+3. 수수료/세금은 도구에서 자동 반영
+
+### 6. 장점과 한계
+
+#### 장점
+
+✅ **증권사 API 불필요**
+- API를 제공하지 않는 증권사도 사용 가능
+- API 연동 비용/제한 없음
+
+✅ **실시간 시장 데이터**
+- KRX 공식 데이터 활용
+- 외국인/기관 매매 동향 확인
+- 무료로 이용 가능
+
+✅ **전략 기반 추천**
+- 알고리즘 기반 리밸런싱 추천
+- 다양한 전략 조합 가능
+- 위험 관리 자동화
+
+✅ **완전한 통제**
+- 매매 시점 직접 결정
+- 가격 협상력 유지
+- 시장 상황 판단 반영
+
+#### 한계
+
+⚠️ **수동 실행 필요**
+- 자동 매매 불가
+- 사용자가 직접 주문 실행
+- 신속한 대응 어려움
+
+⚠️ **포지션 관리**
+- 매매 후 수동 업데이트 필요
+- 실수 가능성 존재
+- 동기화 주의 필요
+
+⚠️ **데이터 지연**
+- 실시간이 아닌 준실시간
+- API 호출 제한 있음
+- 네트워크 의존성
+
+### 7. 문제 해결
+
+#### API 오류
+
+**시세 조회 실패:**
+```python
+# 재시도 로직
+for i in range(3):
+    market_data = api_client.get_market_data(ticker)
+    if market_data:
+        break
+    time.sleep(1)
+```
+
+**네트워크 오류:**
+- 인터넷 연결 확인
+- 방화벽 설정 확인
+- 타임아웃 설정 조정
+
+#### 포지션 파일 오류
+
+**파일 형식 오류:**
+```bash
+# JSON 유효성 검사
+python -m json.tool data/my_positions.json
+```
+
+**백업 및 복구:**
+```bash
+# 백업
+cp data/my_positions.json data/my_positions.backup.json
+
+# 복구
+cp data/my_positions.backup.json data/my_positions.json
+```
+
+#### 매매 추천 검증
+
+**추천 재확인:**
+1. 시장 상황 급변 시 재분석
+2. 이상한 추천은 무시
+3. 소액으로 먼저 테스트
+
+**리스크 관리:**
+- 한 번에 큰 금액 투자 지양
+- 분할 매매 활용
+- 손절선 설정
+
+### 8. 실제 사용 예시
+
+#### Case 1: 외국인 매수 종목 포착
+
+```bash
+# 1. 시스템 실행
+python examples/manual_trading_example.py
+
+# 출력:
+# [실시간 시세]
+#   종목        현재가    외국인순매수      기관순매수
+#   005930     72,000원      +1,500,000주      +500,000주
+#   000660    135,000원        +800,000주      +200,000주
+#
+# [매매 추천]
+#   📈 매수: 005930 (외국인+기관 동시 순매수)
+
+# 2. 증권사 앱에서 삼성전자 매수
+
+# 3. 포지션 업데이트
+python tools/update_positions.py
+# 메뉴에서 4번 선택 → 매수 기록
+```
+
+#### Case 2: 리밸런싱
+
+```bash
+# 1. 주간 리밸런싱 실행 (매주 월요일)
+python examples/manual_trading_example.py
+
+# 출력:
+# [매매 추천]
+#   📉 매도: 035420 15주 (비중 초과)
+#   📈 매수: 000660 10주 (비중 부족)
+
+# 2. HTS에서 순서대로 실행
+#    - NAVER 15주 매도
+#    - SK하이닉스 10주 매수
+
+# 3. 포지션 업데이트
+python tools/update_positions.py
+```
+
+#### Case 3: 신규 종목 추가
+
+```bash
+# 1. 포지션 파일 직접 편집
+# data/my_positions.json에 새 종목 추가
+
+# 2. 시스템 재실행하여 리밸런싱 확인
+python examples/manual_trading_example.py
+
+# 3. 추천에 따라 매매 실행
+```
+
+### 9. 고급 활용
+
+#### 전략 커스터마이징
+
+```python
+# 나만의 전략 비중 조정
+strategy = MultiStrategy(
+    strategies=[
+        ForeignFollowStrategy(),  # 외국인 수급
+        MomentumStrategy(),       # 모멘텀
+        MeanReversionStrategy()   # 평균회귀
+    ],
+    weights=[0.5, 0.3, 0.2]  # 비중 조정
+)
+```
+
+#### 자동화 스크립트
+
+```bash
+#!/bin/bash
+# daily_check.sh - 매일 자동 실행
+
+# 1. 포트폴리오 분석
+python examples/manual_trading_example.py > daily_report.txt
+
+# 2. 이메일로 리포트 전송
+mail -s "오늘의 매매 추천" your@email.com < daily_report.txt
+
+# Cron 설정: 매일 오전 8시 50분 실행
+# 50 8 * * 1-5 /path/to/daily_check.sh
+```
+
+#### 다중 포트폴리오 관리
+
+```python
+# 포트폴리오별 관리
+portfolios = {
+    'aggressive': 'data/positions_aggressive.json',
+    'moderate': 'data/positions_moderate.json',
+    'conservative': 'data/positions_conservative.json'
+}
+
+for name, file in portfolios.items():
+    api_client = KRXAPIClient(position_file=file)
+    api_client.connect()
+    # 분석 및 추천...
+```
+
+### 10. 참고 자료
+
+#### KRX 데이터 출처
+- **KRX 정보데이터시스템**: http://data.krx.co.kr
+- **네이버 금융**: https://finance.naver.com
+- **금융감독원 전자공시**: https://dart.fss.or.kr
+
+#### 증권사별 매매 방법
+- 각 증권사 HTS/MTS 매뉴얼 참고
+- 지정가/시장가 주문 방법
+- 조건부 주문 활용
+
+#### 투자 유의사항
+- 이 시스템은 투자 조언이 아닌 정보 제공 목적입니다
+- 투자 결정과 책임은 본인에게 있습니다
+- 충분한 테스트 후 소액으로 시작하세요
+- 시장 상황을 항상 주시하세요
+
