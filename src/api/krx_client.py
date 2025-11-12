@@ -3,6 +3,7 @@ KRX (한국거래소) 및 DART API 클라이언트
 KRX와 DART의 공식 API를 직접 사용하여 시장 데이터를 가져옵니다
 """
 import json
+import os
 import requests
 from typing import Dict, List, Optional
 from datetime import datetime, timedelta
@@ -25,10 +26,13 @@ class KRXAPIClient(BaseAPIClient):
         """
         Args:
             position_file: 포지션 정보 파일 경로
-            dart_api_key: DART API 키 (선택사항)
+            dart_api_key: DART API 키 (선택사항, 없으면 환경변수에서 읽음)
         """
         self.position_file = position_file
-        self.dart_api_key = dart_api_key
+
+        # DART API 키: 파라미터 > 환경변수 순서로 확인
+        self.dart_api_key = dart_api_key or self._load_env_variable('DART_API_KEY')
+
         self.positions = {}
         self.is_connected = False
 
@@ -44,6 +48,42 @@ class KRXAPIClient(BaseAPIClient):
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
             'Referer': 'http://data.krx.co.kr/'
         })
+
+    def _load_env_variable(self, key: str) -> Optional[str]:
+        """
+        환경변수 또는 .env 파일에서 값 읽기
+
+        Args:
+            key: 환경변수 이름
+
+        Returns:
+            환경변수 값 또는 None
+        """
+        # 1. 환경변수 확인
+        value = os.environ.get(key)
+        if value:
+            return value
+
+        # 2. .env 파일 확인
+        env_file = '.env'
+        if os.path.exists(env_file):
+            try:
+                with open(env_file, 'r') as f:
+                    for line in f:
+                        line = line.strip()
+                        # 주석이나 빈 줄 스킵
+                        if not line or line.startswith('#'):
+                            continue
+
+                        # KEY=VALUE 형식 파싱
+                        if '=' in line:
+                            env_key, env_value = line.split('=', 1)
+                            if env_key.strip() == key:
+                                return env_value.strip()
+            except Exception:
+                pass
+
+        return None
 
     def connect(self):
         """API 연결 및 포지션 파일 로드"""
