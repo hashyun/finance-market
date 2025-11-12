@@ -45,3 +45,6 @@ Thumbs.db
 *.xls
 !data/sample_stocks.json
 logs/
+
+# Environment variables
+.env
