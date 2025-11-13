@@ -240,7 +240,7 @@ class InvestorFlowAnalyzer:
         }
 
     @staticmethod
-    def find_foreign_favorites(stocks: List[KoreanStock], top_n: int = 10) -> List[Tuple[KoreanStock, float]]:
+    def find_foreign_favorites(stocks: List[KoreanStock], top_n: int = 5) -> List[Tuple[KoreanStock, float]]:
         """
         외국인이 선호하는 종목 찾기
 
@@ -263,7 +263,7 @@ class InvestorFlowAnalyzer:
         return stock_scores[:top_n]
 
     @staticmethod
-    def find_institution_favorites(stocks: List[KoreanStock], top_n: int = 10) -> List[Tuple[KoreanStock, float]]:
+    def find_institution_favorites(stocks: List[KoreanStock], top_n: int = 5) -> List[Tuple[KoreanStock, float]]:
         """
         기관이 선호하는 종목 찾기
         """

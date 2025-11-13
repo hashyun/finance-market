@@ -277,24 +277,47 @@ class ManualTradingAdvisor:
 
     def _calculate_target_weights(self) -> Dict[str, float]:
         """
-        목표 비중 계산
+        목표 비중 계산 (점수 기반 차등 배분)
 
         Returns:
             {ticker: weight}
         """
-        # 간단한 동일 비중 (실제로는 전략 기반으로 계산)
         n = len(self.target_tickers)
         if n == 0:
             return {}
 
-        # 모든 종목에 동일 비중
-        weights = {ticker: 1.0 / n for ticker in self.target_tickers}
+        # 5개 종목만 선택 (이미 선택되었다고 가정하지만, 혹시 모르니 제한)
+        tickers = self.target_tickers[:5]
 
-        # 최대 포지션 크기 제한
+        # 점수 기반 비중 계산을 위해 전략 사용
+        # 실제 구현에서는 strategy.calculate_score를 사용해야 하지만
+        # 여기서는 간단히 랭킹 기반 차등 배분 사용
+
+        # 5개 종목일 경우: 30%, 25%, 20%, 15%, 10%
+        # 더 적은 경우에도 대응
+        if len(tickers) == 5:
+            base_weights = [0.30, 0.25, 0.20, 0.15, 0.10]
+        elif len(tickers) == 4:
+            base_weights = [0.30, 0.25, 0.25, 0.20]
+        elif len(tickers) == 3:
+            base_weights = [0.40, 0.35, 0.25]
+        elif len(tickers) == 2:
+            base_weights = [0.55, 0.45]
+        else:
+            base_weights = [1.0]
+
+        weights = {}
+        for i, ticker in enumerate(tickers):
+            if i < len(base_weights):
+                weights[ticker] = base_weights[i]
+            else:
+                weights[ticker] = 0.10  # 기본값
+
+        # 최대 포지션 크기 제한 적용
         for ticker in weights:
             weights[ticker] = min(weights[ticker], self.max_position_size)
 
-        # 재정규화
+        # 재정규화 (비중 합이 1이 되도록)
         total = sum(weights.values())
         if total > 0:
             weights = {k: v / total for k, v in weights.items()}
