@@ -195,22 +195,22 @@ class ManualTradingAdvisor:
 
     def print_trading_guide(self):
         """매매 가이드 출력"""
-        print("\n" + "="*80)
+        print("\n" + "="*90)
         print("  포트폴리오 분석 및 매매 가이드")
-        print("="*80)
+        print("="*90)
 
         # 포트폴리오 분석
         analysis = self.get_portfolio_analysis()
 
         print("\n[계좌 현황]")
         print(f"  총 자산:          {analysis['total_value']:>15,.0f}원")
-        print(f"  현금 잔고:        {analysis['cash_balance']:>15,.0f}원")
-        print(f"  주식 평가액:      {analysis['stock_value']:>15,.0f}원")
+        print(f"  현금 잔고:        {analysis['cash_balance']:>15,.0f}원 ({analysis['cash_balance']/analysis['total_value']*100:.1f}%)")
+        print(f"  주식 평가액:      {analysis['stock_value']:>15,.0f}원 ({analysis['stock_value']/analysis['total_value']*100:.1f}%)")
         print(f"  손익:             {analysis['profit_loss']:>15,.0f}원 ({analysis['profit_loss_pct']:+.2f}%)")
 
         print("\n[포트폴리오 비중]")
-        print(f"  {'종목':10} {'현재비중':>12} {'목표비중':>12} {'차이':>12} {'상태':>10}")
-        print("  " + "-"*60)
+        print(f"  {'종목':10} {'현재비중':>12} {'목표비중':>12} {'차이':>12} {'상태':>12}")
+        print("  " + "-"*65)
 
         for ticker in self.target_tickers:
             current = analysis['current_weights'].get(ticker, 0)
@@ -224,7 +224,7 @@ class ManualTradingAdvisor:
             print(f"  {ticker:10} "
                   f"{current:>11.1%} "
                   f"{target:>11.1%} "
-                  f"{deviation:>11.1%} "
+                  f"{deviation:>+11.1%} "
                   f"{status:>12}")
 
         # 매매 추천
@@ -232,48 +232,75 @@ class ManualTradingAdvisor:
 
         if not recommendations:
             print("\n[매매 추천]")
-            print("  리밸런싱이 필요하지 않습니다.")
+            print("  ✅ 리밸런싱이 필요하지 않습니다.")
+            print("\n" + "="*90)
             return
 
-        print("\n[매매 추천]")
-        print(f"  리밸런싱 필요: 예 (임계값: {self.rebalance_threshold:.1%})")
-        print()
+        print(f"\n[리밸런싱 필요 여부]")
+        print(f"  임계값: {self.rebalance_threshold:.1%} | 상태: ⚠️ 리밸런싱 필요")
 
         # 매도 추천
         sell_recs = [r for r in recommendations if r.action == "SELL"]
         if sell_recs:
-            print("  📉 매도 추천:")
+            print("\n" + "="*90)
+            print("  📉 매도 추천")
+            print("="*90)
+            print(f"  {'종목코드':10} {'종목명':10} {'수량':>10} {'가격':>12} {'예상금액':>15} {'우선순위':>8}")
+            print("  " + "-"*86)
+
             for rec in sell_recs:
-                print(f"    • {rec.ticker}: {rec.recommended_quantity:,}주 @ {rec.estimated_price:,.0f}원")
-                print(f"      (예상 금액: {rec.estimated_amount:,.0f}원)")
-                print(f"      이유: {rec.reason}")
-                print()
+                holdings = self.api_client.get_holdings()
+                ticker_info = self.api_client.positions['holdings'].get(rec.ticker, {})
+                name = ticker_info.get('name', rec.ticker)
+                priority_text = "높음" if rec.priority == 1 else "중간" if rec.priority == 2 else "낮음"
+
+                print(f"  {rec.ticker:10} "
+                      f"{name:10} "
+                      f"{rec.recommended_quantity:>10,}주 "
+                      f"{rec.estimated_price:>12,.0f}원 "
+                      f"{rec.estimated_amount:>15,.0f}원 "
+                      f"{priority_text:>8}")
 
         # 매수 추천
         buy_recs = [r for r in recommendations if r.action == "BUY"]
         if buy_recs:
-            print("  📈 매수 추천:")
+            print("\n" + "="*90)
+            print("  📈 매수 추천")
+            print("="*90)
+            print(f"  {'종목코드':10} {'종목명':10} {'수량':>10} {'가격':>12} {'예상금액':>15} {'우선순위':>8}")
+            print("  " + "-"*86)
+
             for rec in buy_recs:
-                print(f"    • {rec.ticker}: {rec.recommended_quantity:,}주 @ {rec.estimated_price:,.0f}원")
-                print(f"      (예상 금액: {rec.estimated_amount:,.0f}원)")
-                print(f"      이유: {rec.reason}")
-                print()
+                ticker_info = self.api_client.positions['holdings'].get(rec.ticker, {})
+                name = ticker_info.get('name', rec.ticker)
+                priority_text = "높음" if rec.priority == 1 else "중간" if rec.priority == 2 else "낮음"
 
-        # 실행 순서 안내
-        print("  💡 실행 순서:")
-        print("    1. 매도 주문을 먼저 실행하여 현금을 확보하세요")
-        print("    2. 매도 체결 후 매수 주문을 실행하세요")
-        print("    3. 주문 체결 후 포지션 파일을 업데이트하세요")
+                print(f"  {rec.ticker:10} "
+                      f"{name:10} "
+                      f"{rec.recommended_quantity:>10,}주 "
+                      f"{rec.estimated_price:>12,.0f}원 "
+                      f"{rec.estimated_amount:>15,.0f}원 "
+                      f"{priority_text:>8}")
 
-        # 총 매수/매도 금액
+        # 요약
         total_sell = sum(r.estimated_amount for r in sell_recs)
         total_buy = sum(r.estimated_amount for r in buy_recs)
 
-        print(f"\n  총 매도 예상액: {total_sell:>15,.0f}원")
-        print(f"  총 매수 예상액: {total_buy:>15,.0f}원")
-        print(f"  순 현금 변동:   {total_sell - total_buy:>15,.0f}원")
+        print("\n" + "="*90)
+        print("  💰 거래 요약")
+        print("="*90)
+        print(f"  총 매도 예상액:   {total_sell:>15,.0f}원")
+        print(f"  총 매수 예상액:   {total_buy:>15,.0f}원")
+        print(f"  순 현금 변동:     {total_sell - total_buy:>+15,.0f}원")
 
-        print("\n" + "="*80)
+        # 실행 안내
+        print("\n  💡 실행 순서:")
+        print("     1️⃣  매도 주문 먼저 실행 → 현금 확보")
+        print("     2️⃣  매도 체결 확인")
+        print("     3️⃣  매수 주문 실행")
+        print("     4️⃣  포지션 파일(data/my_positions.json) 업데이트")
+
+        print("\n" + "="*90)
 
     def _calculate_target_weights(self) -> Dict[str, float]:
         """
