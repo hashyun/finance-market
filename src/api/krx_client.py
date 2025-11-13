@@ -138,8 +138,8 @@ class KRXAPIClient(BaseAPIClient):
             df = self.stock.get_market_ohlcv_by_date(start_str, end_str, ticker)
 
             if df.empty:
-                print(f"⚠️  {ticker}: 데이터가 없습니다")
-                return None
+                print(f"⚠️  {ticker}: pykrx 데이터 없음, CSV 파일 확인 중...")
+                return self._load_from_csv(ticker)
 
             # 최신 데이터
             latest = df.iloc[-1]
@@ -193,8 +193,9 @@ class KRXAPIClient(BaseAPIClient):
             return market_data
 
         except Exception as e:
-            print(f"❌ KRX 시세 조회 오류 ({ticker}): {e}")
-            return None
+            print(f"⚠️  KRX 시세 조회 오류 ({ticker}): {e}")
+            print(f"   CSV 파일 폴백 시도 중...")
+            return self._load_from_csv(ticker)
 
     def get_market_data_batch(self, tickers: List[str]) -> Dict[str, MarketData]:
         """여러 종목 시세 일괄 조회"""
@@ -395,3 +396,62 @@ class KRXAPIClient(BaseAPIClient):
             return self.stock.get_market_ticker_name(ticker)
         except Exception:
             return ticker
+
+    def _load_from_csv(self, ticker: str) -> Optional[MarketData]:
+        """
+        CSV 파일에서 시세 데이터 로드 (폴백)
+
+        Args:
+            ticker: 종목코드
+
+        Returns:
+            시장 데이터
+        """
+        import csv
+
+        csv_file = f"data/market_data/{ticker}.csv"
+
+        if not os.path.exists(csv_file):
+            print(f"   ❌ CSV 파일 없음: {csv_file}")
+            return None
+
+        try:
+            with open(csv_file, 'r', encoding='utf-8') as f:
+                reader = csv.DictReader(f)
+                rows = list(reader)
+
+                if not rows:
+                    print(f"   ❌ CSV 파일이 비어있음: {csv_file}")
+                    return None
+
+                # 최신 데이터 (마지막 행)
+                latest = rows[-1]
+
+                market_data = MarketData(
+                    ticker=ticker,
+                    timestamp=latest.get('Date', datetime.now().strftime('%Y-%m-%d')),
+                    price=float(latest['Close']),
+                    open=float(latest['Open']),
+                    high=float(latest['High']),
+                    low=float(latest['Low']),
+                    volume=int(latest['Volume']),
+                    foreign_buy=0,
+                    foreign_sell=0,
+                    institution_buy=0,
+                    institution_sell=0,
+                    individual_buy=0,
+                    individual_sell=0,
+                    program_buy=0,
+                    program_sell=0,
+                    short_sell_volume=0
+                )
+
+                # 캐시 저장
+                self.price_cache[ticker] = (datetime.now(), market_data)
+
+                print(f"   ✅ CSV에서 로드: {ticker} = {market_data.price:,.0f}원")
+                return market_data
+
+        except Exception as e:
+            print(f"   ❌ CSV 로드 실패: {e}")
+            return None
