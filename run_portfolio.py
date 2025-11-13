@@ -34,27 +34,29 @@ def get_top_stocks(api_client: KRXAPIClient, count: int = 5):
     print("  📊 종목 추천 시스템")
     print("="*90)
 
-    # KOSPI 대형주 종목 리스트 (예시)
-    candidate_tickers = [
-        "005930",  # 삼성전자
-        "000660",  # SK하이닉스
-        "035420",  # NAVER
-        "035720",  # 카카오
-        "207940",  # 삼성바이오로직스
-        "005380",  # 현대차
-        "000270",  # 기아
-        "051910",  # LG화학
-        "006400",  # 삼성SDI
-        "068270",  # 셀트리온
-        "105560",  # KB금융
-        "055550",  # 신한지주
-        "096770",  # SK이노베이션
-        "012330",  # 현대모비스
-        "028260",  # 삼성물산
-    ]
+    # KOSPI 대형주 종목 리스트 (예시) - 종목명 매핑 포함
+    candidate_stocks = {
+        "005930": "삼성전자",
+        "000660": "SK하이닉스",
+        "035420": "NAVER",
+        "035720": "카카오",
+        "207940": "삼성바이오",
+        "005380": "현대차",
+        "000270": "기아",
+        "051910": "LG화학",
+        "006400": "삼성SDI",
+        "068270": "셀트리온",
+        "105560": "KB금융",
+        "055550": "신한지주",
+        "096770": "SK이노베이션",
+        "012330": "현대모비스",
+        "028260": "삼성물산",
+    }
+
+    candidate_tickers = list(candidate_stocks.keys())
 
     print(f"\n후보 종목: {len(candidate_tickers)}개")
-    print("분석 기준: 최근 20일 수익률 + 거래량")
+    print("분석 기준: 거래량(30%) + 외국인 순매수(40%) + 기관 순매수(30%)")
 
     # 시세 조회
     stocks_data = []
@@ -65,22 +67,31 @@ def get_top_stocks(api_client: KRXAPIClient, count: int = 5):
         if not market_data:
             continue
 
-        try:
-            name = str(api_client.get_ticker_name(ticker))
-            if not name or name == ticker:
-                name = ticker
-        except:
-            name = ticker
+        # 종목명 가져오기 (매핑 사용)
+        name = candidate_stocks.get(ticker, ticker)
 
-        # 간단한 점수 계산 (실제로는 더 복잡한 로직 사용)
-        # 거래량이 많을수록, 최근 가격이 오를수록 높은 점수
-        score = market_data.volume / 1000000  # 거래량 점수
+        # 종합 점수 계산
+        # 1. 거래량 점수 (거래 활발도)
+        volume_score = market_data.volume / 1000000
+
+        # 2. 외국인 순매수 점수
+        foreign_net = market_data.foreign_buy - market_data.foreign_sell
+        foreign_score = foreign_net / 100000 if market_data.volume > 0 else 0
+
+        # 3. 기관 순매수 점수
+        institution_net = market_data.institution_buy - market_data.institution_sell
+        institution_score = institution_net / 100000 if market_data.volume > 0 else 0
+
+        # 종합 점수 (거래량 30% + 외국인 40% + 기관 30%)
+        score = (volume_score * 0.3 + foreign_score * 0.4 + institution_score * 0.3)
 
         stocks_data.append({
             'ticker': ticker,
             'name': name,
             'price': market_data.price,
             'volume': market_data.volume,
+            'foreign_net': foreign_net,
+            'institution_net': institution_net,
             'score': score
         })
 
@@ -91,13 +102,18 @@ def get_top_stocks(api_client: KRXAPIClient, count: int = 5):
     top_stocks = stocks_data[:count]
 
     print(f"\n✅ 추천 종목 (상위 {count}개)")
-    print("="*90)
-    print(f"  {'순위':4} {'종목코드':10} {'종목명':15} {'현재가':>12} {'거래량':>15}")
-    print("  " + "-"*86)
+    print("="*100)
+    print(f"  {'순위':4} {'종목코드':10} {'종목명':15} {'현재가':>12} {'거래량':>15} {'외국인':>12} {'기관':>12}")
+    print("  " + "-"*96)
 
     for i, stock in enumerate(top_stocks, 1):
+        foreign_icon = "📈" if stock['foreign_net'] > 0 else "📉" if stock['foreign_net'] < 0 else "➖"
+        institution_icon = "📈" if stock['institution_net'] > 0 else "📉" if stock['institution_net'] < 0 else "➖"
+
         print(f"  {i:4} {stock['ticker']:10} {stock['name']:15} "
-              f"{stock['price']:>12,.0f}원 {stock['volume']:>15,}주")
+              f"{stock['price']:>12,.0f}원 {stock['volume']:>15,}주 "
+              f"{foreign_icon}{abs(stock['foreign_net']):>10,}주 "
+              f"{institution_icon}{abs(stock['institution_net']):>10,}주")
 
     return [s['ticker'] for s in top_stocks]
 
