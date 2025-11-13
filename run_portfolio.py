@@ -2,10 +2,16 @@
 포트폴리오 추천 및 리밸런싱 - 올인원 스크립트
 
 기능:
-1. KRX에서 전체 종목 데이터 가져오기
-2. 상위 5개 종목 추천 (모멘텀 + 외국인 매수 기준)
+1. 종목 추천 시스템
+   - 대형주 15개 (기본) 또는 KOSPI 시가총액 상위 100개
+   - 외국인 순매수(40%) + 기관 순매수(30%) + 거래량(30%)
+2. 상위 5개 종목 추천
 3. 포트폴리오 리밸런싱 (차등 비중: 30%, 25%, 20%, 15%, 10%)
 4. 매수/매도 추천 (표 형식)
+
+설정:
+- USE_ALL_KOSPI: False (대형주 15개) / True (KOSPI 상위 100개)
+- TOP_N: 추천 종목 수 (기본 5개)
 """
 import sys
 import os
@@ -19,13 +25,14 @@ from src.models.korean_stock import KoreanStock, TradingData
 from datetime import datetime, timedelta
 
 
-def get_top_stocks(api_client: KRXAPIClient, count: int = 5):
+def get_top_stocks(api_client: KRXAPIClient, count: int = 5, use_all_kospi: bool = False):
     """
     추천 종목 선정
 
     Args:
         api_client: API 클라이언트
         count: 추천 종목 수
+        use_all_kospi: True면 전체 KOSPI, False면 대형주만
 
     Returns:
         추천 종목 티커 리스트
@@ -34,26 +41,50 @@ def get_top_stocks(api_client: KRXAPIClient, count: int = 5):
     print("  📊 종목 추천 시스템")
     print("="*90)
 
-    # KOSPI 대형주 종목 리스트 (예시) - 종목명 매핑 포함
-    candidate_stocks = {
-        "005930": "삼성전자",
-        "000660": "SK하이닉스",
-        "035420": "NAVER",
-        "035720": "카카오",
-        "207940": "삼성바이오",
-        "005380": "현대차",
-        "000270": "기아",
-        "051910": "LG화학",
-        "006400": "삼성SDI",
-        "068270": "셀트리온",
-        "105560": "KB금융",
-        "055550": "신한지주",
-        "096770": "SK이노베이션",
-        "012330": "현대모비스",
-        "028260": "삼성물산",
-    }
+    if use_all_kospi:
+        # pykrx로 전체 KOSPI 종목 가져오기
+        print("\n전체 KOSPI 종목 조회 중...")
+        try:
+            from datetime import datetime
+            from pykrx import stock
 
-    candidate_tickers = list(candidate_stocks.keys())
+            today = datetime.now().strftime("%Y%m%d")
+            all_tickers = stock.get_market_ticker_list(date=today, market="KOSPI")
+
+            # 시가총액 상위 100개만 (너무 많으면 느림)
+            market_cap_df = stock.get_market_cap(date=today, market="KOSPI")
+            market_cap_df = market_cap_df.sort_values('시가총액', ascending=False)
+            candidate_tickers = market_cap_df.head(100).index.tolist()
+
+            print(f"✅ KOSPI 시가총액 상위 100개 종목 선정")
+            candidate_stocks = {}  # 종목명은 API로 조회
+
+        except Exception as e:
+            print(f"⚠️  전체 KOSPI 조회 실패: {e}")
+            print("   대형주 15개로 폴백합니다...")
+            use_all_kospi = False
+
+    if not use_all_kospi:
+        # 대형주 15개 (폴백 또는 기본 모드)
+        candidate_stocks = {
+            "005930": "삼성전자",
+            "000660": "SK하이닉스",
+            "035420": "NAVER",
+            "035720": "카카오",
+            "207940": "삼성바이오",
+            "005380": "현대차",
+            "000270": "기아",
+            "051910": "LG화학",
+            "006400": "삼성SDI",
+            "068270": "셀트리온",
+            "105560": "KB금융",
+            "055550": "신한지주",
+            "096770": "SK이노베이션",
+            "012330": "현대모비스",
+            "028260": "삼성물산",
+        }
+        candidate_tickers = list(candidate_stocks.keys())
+        print(f"대형주 {len(candidate_tickers)}개 종목 분석")
 
     print(f"\n후보 종목: {len(candidate_tickers)}개")
     print("분석 기준: 거래량(30%) + 외국인 순매수(40%) + 기관 순매수(30%)")
@@ -67,8 +98,18 @@ def get_top_stocks(api_client: KRXAPIClient, count: int = 5):
         if not market_data:
             continue
 
-        # 종목명 가져오기 (매핑 사용)
-        name = candidate_stocks.get(ticker, ticker)
+        # 종목명 가져오기
+        if use_all_kospi or ticker not in candidate_stocks:
+            # pykrx로 종목명 조회
+            try:
+                name = str(api_client.get_ticker_name(ticker))
+                if not name or name == ticker:
+                    name = ticker
+            except:
+                name = ticker
+        else:
+            # 하드코딩된 매핑 사용
+            name = candidate_stocks.get(ticker, ticker)
 
         # 종합 점수 계산
         # 1. 거래량 점수 (거래 활발도)
@@ -119,6 +160,11 @@ def get_top_stocks(api_client: KRXAPIClient, count: int = 5):
 
 
 def main():
+    # ========== 설정 ==========
+    USE_ALL_KOSPI = False  # True: KOSPI 시가총액 상위 100개, False: 대형주 15개
+    TOP_N = 5  # 추천 종목 수
+    # ==========================
+
     print("="*90)
     print("  🚀 포트폴리오 추천 및 리밸런싱 시스템")
     print("="*90)
@@ -130,7 +176,7 @@ def main():
 
     # 2. 종목 추천
     print("\n[2단계] 종목 추천...")
-    recommended_tickers = get_top_stocks(api_client, count=5)
+    recommended_tickers = get_top_stocks(api_client, count=TOP_N, use_all_kospi=USE_ALL_KOSPI)
 
     # 3. 현재 포트폴리오 확인
     print("\n[3단계] 현재 포트폴리오 상태")
