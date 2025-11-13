@@ -44,7 +44,7 @@ class BaseStrategy(ABC):
         """
         pass
 
-    def rank_stocks(self, stocks: List[KoreanStock], top_n: int = 10) -> List[tuple]:
+    def rank_stocks(self, stocks: List[KoreanStock], top_n: int = 5) -> List[tuple]:
         """
         종목 순위 매기기
 

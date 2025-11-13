@@ -51,15 +51,20 @@ class PortfolioRebalancer:
 
     def calculate_target_weights(self) -> Dict[str, float]:
         """
-        전략을 기반으로 목표 비중 계산
+        전략을 기반으로 목표 비중 계산 (점수 기반 차등 배분)
 
         Returns:
             {ticker: target_weight} 딕셔너리
         """
+        # 5개 종목만 선택 (이미 선택되었다고 가정하지만, 혹시 모르니 제한)
+        tickers = self.target_tickers[:5]
+
+        if len(tickers) == 0:
+            return {}
+
         # 모든 종목 점수 계산
         scores = {}
-
-        for ticker in self.target_tickers:
+        for ticker in tickers:
             try:
                 # 실시간 데이터로 임시 주식 객체 생성 필요
                 # 여기서는 간단히 전략 점수만 사용
@@ -69,25 +74,34 @@ class PortfolioRebalancer:
             except Exception as e:
                 scores[ticker] = 0
 
-        # 점수 합계
-        total_score = sum(scores.values())
+        # 점수 기준으로 정렬 (높은 점수부터)
+        sorted_tickers = sorted(scores.keys(), key=lambda t: scores[t], reverse=True)
 
-        if total_score == 0:
-            # 모든 점수가 0이면 동일 비중
-            n = len(self.target_tickers)
-            return {ticker: 1.0 / n for ticker in self.target_tickers}
+        # 랭킹 기반 차등 배분
+        # 5개 종목일 경우: 30%, 25%, 20%, 15%, 10%
+        if len(sorted_tickers) == 5:
+            base_weights = [0.30, 0.25, 0.20, 0.15, 0.10]
+        elif len(sorted_tickers) == 4:
+            base_weights = [0.30, 0.25, 0.25, 0.20]
+        elif len(sorted_tickers) == 3:
+            base_weights = [0.40, 0.35, 0.25]
+        elif len(sorted_tickers) == 2:
+            base_weights = [0.55, 0.45]
+        else:
+            base_weights = [1.0]
 
-        # 점수 비율로 비중 계산
         weights = {}
-        for ticker, score in scores.items():
-            weight = score / total_score
+        for i, ticker in enumerate(sorted_tickers):
+            if i < len(base_weights):
+                weight = base_weights[i]
+            else:
+                weight = 0.10  # 기본값
 
             # 최대 포지션 크기 제한
             weight = min(weight, self.max_position_size)
-
             weights[ticker] = weight
 
-        # 비중 재정규화
+        # 비중 재정규화 (합이 1이 되도록)
         total_weight = sum(weights.values())
         if total_weight > 0:
             weights = {k: v / total_weight for k, v in weights.items()}
