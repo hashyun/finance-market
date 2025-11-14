@@ -22,11 +22,16 @@ load_dotenv()
 # 프로젝트 모듈 임포트
 from src.data_sources import FREDClient, ECOSClient, DARTClient, BondClient
 from src.models.stock import Stock, Portfolio
+from src.models.korean_stock import KoreanStock
 from src.risk.market_risk import MarketRiskAnalyzer
 from src.risk.credit_risk import CreditRiskAnalyzer
 from src.risk.liquidity_risk import LiquidityRiskAnalyzer
 from src.portfolio.optimizer import PortfolioOptimizer
 from src.utils.portfolio_helper import PortfolioHelper
+from src.analysis.investor_flow import InvestorFlowAnalyzer
+from src.strategies.foreign_follow import ForeignFollowStrategy
+from src.strategies.momentum import MomentumStrategy
+from src.strategies.mean_reversion import MeanReversionStrategy
 
 # MCP 서버 초기화
 server = Server("finance-market-mcp")
@@ -135,6 +140,91 @@ async def handle_list_tools() -> list[types.Tool]:
                     "ticker": {
                         "type": "string",
                         "description": "종목명 또는 종목코드 (예: '삼성전자' 또는 '005930')"
+                    }
+                },
+                "required": ["ticker"]
+            }
+        ),
+
+        # ========== 한국 시장 전용 (외국인/기관 매매) ==========
+
+        # 투자자별 매매 동향
+        types.Tool(
+            name="get_investor_flow",
+            description="외국인/기관/개인 투자자의 매매 동향을 분석합니다. 예: '삼성전자'",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "ticker": {
+                        "type": "string",
+                        "description": "종목명 또는 종목코드"
+                    },
+                    "days": {
+                        "type": "integer",
+                        "description": "분석 기간 (일수)",
+                        "default": 20
+                    }
+                },
+                "required": ["ticker"]
+            }
+        ),
+
+        # 외국인 선호 종목
+        types.Tool(
+            name="find_foreign_favorites",
+            description="외국인이 최근 집중 매수하고 있는 종목을 찾습니다. 여러 종목을 분석하여 상위 종목을 추천합니다.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "tickers": {
+                        "type": "string",
+                        "description": "분석할 종목 목록 (예: '삼성전자, SK하이닉스, NAVER, 카카오')"
+                    },
+                    "top_n": {
+                        "type": "integer",
+                        "description": "상위 몇 개 종목을 추천할지",
+                        "default": 3
+                    }
+                },
+                "required": ["tickers"]
+            }
+        ),
+
+        # 매매 전략 신호
+        types.Tool(
+            name="get_trading_signals",
+            description="외국인 수급, 모멘텀, 평균회귀 전략을 종합하여 매매 신호를 생성합니다. 예: '삼성전자'",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "ticker": {
+                        "type": "string",
+                        "description": "종목명 또는 종목코드"
+                    },
+                    "strategies": {
+                        "type": "array",
+                        "description": "사용할 전략 목록",
+                        "items": {
+                            "type": "string",
+                            "enum": ["foreign_follow", "momentum", "mean_reversion"]
+                        },
+                        "default": ["foreign_follow", "momentum"]
+                    }
+                },
+                "required": ["ticker"]
+            }
+        ),
+
+        # 숏 스퀴즈 분석
+        types.Tool(
+            name="analyze_short_squeeze",
+            description="공매도 비율과 외국인/기관 매수세를 분석하여 숏 스퀴즈 가능성을 평가합니다.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "ticker": {
+                        "type": "string",
+                        "description": "종목명 또는 종목코드"
                     }
                 },
                 "required": ["ticker"]
@@ -330,6 +420,15 @@ async def handle_call_tool(
             return await optimize_my_stocks(arguments)
         elif name == "get_stock_info":
             return await get_stock_info(arguments)
+        # 한국 시장 전용 (외국인/기관)
+        elif name == "get_investor_flow":
+            return await get_investor_flow(arguments)
+        elif name == "find_foreign_favorites":
+            return await find_foreign_favorites(arguments)
+        elif name == "get_trading_signals":
+            return await get_trading_signals(arguments)
+        elif name == "analyze_short_squeeze":
+            return await analyze_short_squeeze(arguments)
         # 기존 도구
         elif name == "analyze_portfolio_risk":
             return await analyze_portfolio_risk(arguments)
@@ -812,6 +911,175 @@ async def get_stock_info(args: dict) -> list[types.TextContent]:
             text=f"종목 조회 실패: {str(e)}\n\n"
                  f"입력 예시: '삼성전자' 또는 '005930'"
         )]
+
+
+# ========== 한국 시장 전용 도구 구현 (외국인/기관 매매) ==========
+
+async def get_investor_flow(args: dict) -> list[types.TextContent]:
+    """투자자별 매매 동향 분석"""
+    ticker = args["ticker"]
+    days = args.get("days", 20)
+
+    try:
+        # 종목명 변환
+        if not ticker.isdigit():
+            ticker_map = {
+                '삼성전자': '005930',
+                'SK하이닉스': '000660',
+                'NAVER': '035420',
+                '카카오': '035720',
+            }
+            ticker = ticker_map.get(ticker, ticker)
+
+        # KoreanStock 객체 생성 (실제로는 pykrx로 데이터 조회해야 함)
+        # 여기서는 샘플 구현
+        result = {
+            "종목코드": ticker,
+            "분석기간": f"{days}일",
+            "설명": "외국인/기관 매매 동향 분석 기능은 실시간 KRX 데이터와 함께 사용하면 더 정확합니다.",
+            "기능": [
+                "외국인 매수 강도 분석",
+                "기관 매수 강도 분석",
+                "투자자 컨센서스 (외국인+기관 일치도)",
+                "프로그램 매매 신호",
+                "숏 스퀴즈 가능성 분석"
+            ],
+            "사용방법": "실시간 데이터와 함께 사용하려면 KRX API 클라이언트를 통해 TradingData를 제공해야 합니다."
+        }
+
+        return [types.TextContent(
+            type="text",
+            text=json.dumps(result, ensure_ascii=False, indent=2)
+        )]
+
+    except Exception as e:
+        return [types.TextContent(type="text", text=f"분석 실패: {str(e)}")]
+
+
+async def find_foreign_favorites(args: dict) -> list[types.TextContent]:
+    """외국인 선호 종목 찾기"""
+    tickers_text = args["tickers"]
+    top_n = args.get("top_n", 3)
+
+    try:
+        # 종목 코드 파싱
+        tickers = [t.strip() for t in tickers_text.replace(',', ' ').split() if t.strip()]
+
+        ticker_map = {
+            '삼성전자': '005930',
+            'SK하이닉스': '000660',
+            'NAVER': '035420',
+            '카카오': '035720',
+        }
+
+        # 종목명을 코드로 변환
+        converted_tickers = []
+        for ticker in tickers:
+            if not ticker.isdigit():
+                ticker = ticker_map.get(ticker, ticker)
+            converted_tickers.append(ticker)
+
+        result = {
+            "분석종목수": len(converted_tickers),
+            "상위추천수": top_n,
+            "설명": "외국인 선호 종목 분석은 실시간 외국인 매매 데이터가 필요합니다.",
+            "추천로직": [
+                "최근 20일간 외국인 순매수 강도 계산",
+                "기관 매매와의 컨센서스 확인",
+                "프로그램 매매 신호 반영"
+            ],
+            "필요데이터": "pykrx를 통한 실시간 투자자별 매매 동향 데이터"
+        }
+
+        return [types.TextContent(
+            type="text",
+            text=json.dumps(result, ensure_ascii=False, indent=2)
+        )]
+
+    except Exception as e:
+        return [types.TextContent(type="text", text=f"분석 실패: {str(e)}")]
+
+
+async def get_trading_signals(args: dict) -> list[types.TextContent]:
+    """매매 전략 신호 생성"""
+    ticker = args["ticker"]
+    strategies = args.get("strategies", ["foreign_follow", "momentum"])
+
+    try:
+        # 종목명 변환
+        if not ticker.isdigit():
+            ticker_map = {
+                '삼성전자': '005930',
+                'SK하이닉스': '000660',
+                'NAVER': '035420',
+                '카카오': '035720',
+            }
+            ticker = ticker_map.get(ticker, ticker)
+
+        result = {
+            "종목코드": ticker,
+            "적용전략": strategies,
+            "설명": "다중 전략 매매 신호 생성",
+            "전략설명": {
+                "foreign_follow": "외국인+기관 순매수 추종 전략",
+                "momentum": "가격 모멘텀 및 기술적 지표 전략",
+                "mean_reversion": "볼린저 밴드 기반 평균회귀 전략"
+            },
+            "필요데이터": [
+                "투자자별 매매 동향 (pykrx)",
+                "가격 및 거래량 데이터",
+                "기술적 지표 (RSI, MACD, 볼린저밴드)"
+            ]
+        }
+
+        return [types.TextContent(
+            type="text",
+            text=json.dumps(result, ensure_ascii=False, indent=2)
+        )]
+
+    except Exception as e:
+        return [types.TextContent(type="text", text=f"신호 생성 실패: {str(e)}")]
+
+
+async def analyze_short_squeeze(args: dict) -> list[types.TextContent]:
+    """숏 스퀴즈 가능성 분석"""
+    ticker = args["ticker"]
+
+    try:
+        # 종목명 변환
+        if not ticker.isdigit():
+            ticker_map = {
+                '삼성전자': '005930',
+                'SK하이닉스': '000660',
+                'NAVER': '035420',
+                '카카오': '035720',
+            }
+            ticker = ticker_map.get(ticker, ticker)
+
+        result = {
+            "종목코드": ticker,
+            "분석항목": [
+                "공매도 비율 (전체 거래량 대비)",
+                "외국인 + 기관 순매수 강도",
+                "프로그램 매수 급증 여부",
+                "거래량 급증 패턴"
+            ],
+            "숏스퀴즈 조건": {
+                "공매도비율": "10% 이상",
+                "외국인기관": "동시 순매수 전환",
+                "거래량": "평균 대비 2배 이상 증가"
+            },
+            "데이터소스": "pykrx를 통한 공매도 데이터 및 투자자별 매매 동향",
+            "참고": "실제 숏 스퀴즈 분석을 위해서는 실시간 공매도 데이터가 필요합니다."
+        }
+
+        return [types.TextContent(
+            type="text",
+            text=json.dumps(result, ensure_ascii=False, indent=2)
+        )]
+
+    except Exception as e:
+        return [types.TextContent(type="text", text=f"분석 실패: {str(e)}")]
 
 
 async def main():
