@@ -184,7 +184,7 @@ async def handle_list_tools() -> list[types.Tool]:
                     "use_all_kospi": {
                         "type": "boolean",
                         "description": "true면 KOSPI 시가총액 상위 100개, false면 대형주 15개 분석 (기본값: false)",
-                        "default": false
+                        "default": False
                     }
                 },
                 "required": []
