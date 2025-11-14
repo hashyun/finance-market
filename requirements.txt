@@ -4,3 +4,15 @@ scipy>=1.10.0
 matplotlib>=3.7.0
 requests>=2.31.0
 pykrx>=1.0.40
+
+# MCP Server
+mcp>=1.1.2
+
+# External Data Sources
+fredapi>=0.5.1
+bok-ecos-python>=0.1.1
+dart-fss>=0.3.9
+
+# Additional utilities
+python-dotenv>=1.0.0
+asyncio>=3.4.3

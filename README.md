@@ -2,6 +2,42 @@
 
 Market Risk, Credit Risk, Liquidity Risk를 종합적으로 고려한 스마트 포트폴리오 구성 시스템입니다.
 
+## 🆕 Claude Desktop과 MCP 연동
+
+이 시스템은 **MCP (Model Context Protocol)** 서버로 작동하여 Claude Desktop과 연동할 수 있습니다!
+
+### 빠른 시작
+
+```bash
+# 1. 패키지 설치
+pip install -r requirements.txt
+
+# 2. API 키 설정 (선택사항)
+cp .env.example .env
+# .env 파일에 API 키 입력
+
+# 3. MCP 서버 테스트
+python test_mcp_tools.py
+
+# 4. Claude Desktop 설정
+# MCP_SETUP.md 가이드를 따라 Claude Desktop과 연동
+```
+
+### 제공되는 MCP 도구
+
+Claude Desktop에서 다음 도구들을 사용할 수 있습니다:
+
+1. **포트폴리오 리스크 분석** - 시장/신용/유동성 리스크 종합 분석
+2. **포트폴리오 최적화** - 샤프 비율 최대화 또는 위험 인식 최적화
+3. **FRED 데이터 조회** - 미국 경제 지표 (국채, 금리, GDP 등)
+4. **ECOS 데이터 조회** - 한국은행 경제통계 (기준금리, 환율, CPI 등)
+5. **기업정보 조회** - DART 공시정보 및 재무제표
+6. **국채 수익률 조회** - 한국 국채 수익률 곡선 분석
+
+자세한 설정 방법은 **[MCP_SETUP.md](MCP_SETUP.md)** 를 참조하세요.
+
+---
+
 ## 주요 기능
 
 ### 1. 시장 위험(Market Risk) 관리
