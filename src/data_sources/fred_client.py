@@ -6,7 +6,13 @@ import os
 from typing import Optional, List, Dict
 from datetime import datetime
 import pandas as pd
-from fredapi import Fred
+
+try:
+    from fredapi import Fred
+    FRED_AVAILABLE = True
+except ImportError:
+    FRED_AVAILABLE = False
+    Fred = None
 
 
 class FREDClient:
@@ -20,6 +26,12 @@ class FREDClient:
         Args:
             api_key: FRED API 키 (환경변수에서 자동 로드 가능)
         """
+        if not FRED_AVAILABLE:
+            raise ValueError(
+                "fredapi 패키지가 설치되지 않았습니다. "
+                "pip install fredapi 로 설치하세요."
+            )
+
         self.api_key = api_key or os.getenv('FRED_API_KEY')
         if not self.api_key:
             raise ValueError(

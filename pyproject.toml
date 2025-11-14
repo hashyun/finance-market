@@ -1,0 +1,28 @@
+[project]
+name = "finance-market-mcp"
+version = "1.0.0"
+description = "Portfolio risk analysis and optimization MCP server"
+requires-python = ">=3.8"
+dependencies = [
+    "numpy>=1.24.0",
+    "pandas>=2.0.0",
+    "scipy>=1.10.0",
+    "matplotlib>=3.7.0",
+    "requests>=2.31.0",
+    "pykrx>=1.0.40",
+    "mcp>=1.1.2",
+    "fredapi>=0.5.1",
+    "lxml>=4.9.0",
+    "beautifulsoup4>=4.12.0",
+    "tqdm>=4.65.0",
+    "python-dotenv>=1.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"

@@ -9,6 +9,7 @@ from typing import Optional, Dict, List, Any
 import json
 from datetime import datetime
 from dotenv import load_dotenv
+import numpy as np
 
 from mcp.server.models import InitializationOptions
 from mcp.server import NotificationOptions, Server
@@ -25,6 +26,7 @@ from src.risk.market_risk import MarketRiskAnalyzer
 from src.risk.credit_risk import CreditRiskAnalyzer
 from src.risk.liquidity_risk import LiquidityRiskAnalyzer
 from src.portfolio.optimizer import PortfolioOptimizer
+from src.utils.portfolio_helper import PortfolioHelper
 
 # MCP 서버 초기화
 server = Server("finance-market-mcp")
@@ -83,10 +85,68 @@ async def handle_list_tools() -> list[types.Tool]:
     사용 가능한 도구 목록 반환
     """
     return [
+        # ========== 간편 도구 (추천) ==========
+
+        # 내 포지션 분석 (간편)
+        types.Tool(
+            name="analyze_my_portfolio",
+            description="보유 중인 주식을 간단히 입력하면 실시간 데이터로 리스크를 분석합니다. 예: '삼성전자 100주, SK하이닉스 50주, NAVER 30주'",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "positions": {
+                        "type": "string",
+                        "description": "보유 주식 목록 (예: '삼성전자 100주, SK하이닉스 50주' 또는 '005930 100주, 000660 50주')"
+                    }
+                },
+                "required": ["positions"]
+            }
+        ),
+
+        # 내 종목으로 최적화 (간편)
+        types.Tool(
+            name="optimize_my_stocks",
+            description="보유 종목들로 최적의 투자 비중을 계산합니다. 예: '삼성전자, SK하이닉스, NAVER'",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "tickers": {
+                        "type": "string",
+                        "description": "종목 목록 (예: '삼성전자, SK하이닉스, NAVER' 또는 '005930, 000660, 035420')"
+                    },
+                    "method": {
+                        "type": "string",
+                        "description": "최적화 방법: 'max_sharpe' (샤프비율 최대화) 또는 'risk_aware' (리스크 고려)",
+                        "enum": ["max_sharpe", "risk_aware"],
+                        "default": "max_sharpe"
+                    }
+                },
+                "required": ["tickers"]
+            }
+        ),
+
+        # 실시간 종목 정보
+        types.Tool(
+            name="get_stock_info",
+            description="종목의 실시간 정보를 조회합니다 (현재가, 거래량, 시가총액 등). 예: '삼성전자' 또는 '005930'",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "ticker": {
+                        "type": "string",
+                        "description": "종목명 또는 종목코드 (예: '삼성전자' 또는 '005930')"
+                    }
+                },
+                "required": ["ticker"]
+            }
+        ),
+
+        # ========== 기존 고급 도구 ==========
+
         # 포트폴리오 리스크 분석
         types.Tool(
             name="analyze_portfolio_risk",
-            description="포트폴리오의 시장 리스크, 신용 리스크, 유동성 리스크를 종합 분석합니다.",
+            description="[고급] 상세한 주식 데이터로 포트폴리오 리스크를 분석합니다.",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -263,7 +323,15 @@ async def handle_call_tool(
     도구 호출 처리
     """
     try:
-        if name == "analyze_portfolio_risk":
+        # 간편 도구
+        if name == "analyze_my_portfolio":
+            return await analyze_my_portfolio(arguments)
+        elif name == "optimize_my_stocks":
+            return await optimize_my_stocks(arguments)
+        elif name == "get_stock_info":
+            return await get_stock_info(arguments)
+        # 기존 도구
+        elif name == "analyze_portfolio_risk":
             return await analyze_portfolio_risk(arguments)
         elif name == "optimize_portfolio":
             return await optimize_portfolio(arguments)
@@ -550,6 +618,200 @@ async def get_bond_yields(args: dict) -> list[types.TextContent]:
         type="text",
         text=json.dumps(data, ensure_ascii=False, indent=2, default=str)
     )]
+
+
+# ========== 간편 도구 구현 ==========
+
+async def analyze_my_portfolio(args: dict) -> list[types.TextContent]:
+    """내 포지션 분석 (간편)"""
+    positions = args["positions"]
+
+    try:
+        # 텍스트에서 포트폴리오 생성
+        portfolio, details = PortfolioHelper.create_portfolio_from_text(positions)
+
+        # 리스크 분석
+        var_95 = MarketRiskAnalyzer.value_at_risk(portfolio, 0.95)
+        cvar_95 = MarketRiskAnalyzer.conditional_var(portfolio, 0.95)
+        max_dd = MarketRiskAnalyzer.maximum_drawdown(portfolio)
+        div_ratio = MarketRiskAnalyzer.diversification_ratio(portfolio)
+
+        credit_score = CreditRiskAnalyzer.portfolio_credit_score(portfolio)
+        concentration = CreditRiskAnalyzer.concentration_risk(portfolio)
+        sector_exp = CreditRiskAnalyzer.sector_exposure(portfolio)
+
+        liquidity_score = LiquidityRiskAnalyzer.portfolio_liquidity_score(portfolio)
+
+        # 결과 포맷팅
+        summary = PortfolioHelper.format_position_summary(details)
+
+        result = {
+            "포지션 요약": summary,
+            "성과 지표": {
+                "기대수익률": f"{portfolio.expected_return():.2%}",
+                "변동성": f"{portfolio.volatility():.2%}",
+                "샤프비율": f"{portfolio.sharpe_ratio(0.035):.2f}"
+            },
+            "시장 리스크": {
+                "VaR (95%)": f"{var_95:.2%}",
+                "CVaR (95%)": f"{cvar_95:.2%}",
+                "최대낙폭": f"{max_dd:.2%}",
+                "분산투자비율": f"{div_ratio:.2f}"
+            },
+            "신용 리스크": {
+                "신용점수": f"{credit_score:.1f}/100",
+                "집중도 (HHI)": f"{concentration:.3f}",
+                "섹터별 노출도": {k: f"{v:.1%}" for k, v in sector_exp.items()}
+            },
+            "유동성 리스크": {
+                "유동성점수": f"{liquidity_score:.1f}/100"
+            }
+        }
+
+        return [types.TextContent(
+            type="text",
+            text=json.dumps(result, ensure_ascii=False, indent=2)
+        )]
+
+    except Exception as e:
+        return [types.TextContent(
+            type="text",
+            text=f"포트폴리오 분석 실패: {str(e)}\n\n"
+                 f"입력 예시: '삼성전자 100주, SK하이닉스 50주, NAVER 30주' 또는 '005930 100주, 000660 50주, 035420 30주'"
+        )]
+
+
+async def optimize_my_stocks(args: dict) -> list[types.TextContent]:
+    """내 종목으로 최적화 (간편)"""
+    tickers_text = args["tickers"]
+    method = args.get("method", "max_sharpe")
+
+    try:
+        # 종목 코드 파싱
+        tickers = [t.strip() for t in tickers_text.replace(',', ' ').split() if t.strip()]
+
+        # 종목 데이터 수집
+        stocks = []
+        for ticker in tickers:
+            # 숫자가 아니면 종목명으로 간주
+            if not ticker.isdigit():
+                # 간단한 이름-코드 매핑 (실제로는 검색 API 사용)
+                ticker_map = {
+                    '삼성전자': '005930',
+                    'SK하이닉스': '000660',
+                    'NAVER': '035420',
+                    '카카오': '035720',
+                }
+                ticker = ticker_map.get(ticker, ticker)
+
+            stock_data = PortfolioHelper.get_stock_data(ticker)
+            if not stock_data:
+                continue
+
+            stock_obj = Stock(
+                ticker=stock_data['ticker'],
+                name=stock_data['name'],
+                sector=stock_data['sector'],
+                price=stock_data['price'],
+                historical_returns=stock_data['historical_returns'],
+                trading_volume=stock_data['trading_volume'],
+                market_cap=stock_data['market_cap'],
+                debt_to_equity=stock_data['debt_to_equity'],
+                current_ratio=stock_data['current_ratio'],
+                credit_rating=stock_data['credit_rating']
+            )
+            stocks.append(stock_obj)
+
+        if not stocks:
+            return [types.TextContent(type="text", text="조회 가능한 종목이 없습니다.")]
+
+        # 최적화 엔진
+        optimizer = PortfolioOptimizer(stocks, risk_free_rate=0.035)
+
+        # 최적화 실행
+        if method == "max_sharpe":
+            portfolio = optimizer.optimize_max_sharpe()
+        else:
+            portfolio = optimizer.optimize_risk_aware()
+
+        # 결과 분석
+        analysis = optimizer.analyze_portfolio(portfolio)
+
+        result = {
+            "최적화 방법": "샤프 비율 최대화" if method == "max_sharpe" else "리스크 인식 최적화",
+            "추천 포트폴리오": {
+                f"{stock.name}({stock.ticker})": f"{weight:.1%}"
+                for stock, weight in zip(portfolio.stocks, portfolio.weights)
+                if weight > 0.001  # 0.1% 이상만 표시
+            },
+            "성과 지표": {
+                "기대수익률": f"{analysis['expected_return']:.2%}",
+                "변동성": f"{analysis['volatility']:.2%}",
+                "샤프비율": f"{analysis['sharpe_ratio']:.2f}",
+                "신용점수": f"{analysis['credit_score']:.1f}/100",
+                "유동성점수": f"{analysis['liquidity_score']:.1f}/100"
+            }
+        }
+
+        return [types.TextContent(
+            type="text",
+            text=json.dumps(result, ensure_ascii=False, indent=2)
+        )]
+
+    except Exception as e:
+        return [types.TextContent(
+            type="text",
+            text=f"최적화 실패: {str(e)}\n\n"
+                 f"입력 예시: '삼성전자, SK하이닉스, NAVER' 또는 '005930, 000660, 035420'"
+        )]
+
+
+async def get_stock_info(args: dict) -> list[types.TextContent]:
+    """실시간 종목 정보"""
+    ticker = args["ticker"]
+
+    try:
+        # 종목명이면 코드로 변환
+        if not ticker.isdigit():
+            ticker_map = {
+                '삼성전자': '005930',
+                'SK하이닉스': '000660',
+                'NAVER': '035420',
+                '카카오': '035720',
+            }
+            ticker = ticker_map.get(ticker, ticker)
+
+        stock_data = PortfolioHelper.get_stock_data(ticker, days=30)
+
+        if not stock_data:
+            return [types.TextContent(type="text", text=f"종목 '{ticker}'의 정보를 조회할 수 없습니다.")]
+
+        # 30일 수익률 계산
+        returns_30d = np.array(stock_data['historical_returns'][-30:]) if len(stock_data['historical_returns']) >= 30 else []
+        total_return_30d = (1 + returns_30d).prod() - 1 if len(returns_30d) > 0 else 0
+
+        result = {
+            "종목명": stock_data['name'],
+            "종목코드": stock_data['ticker'],
+            "섹터": stock_data['sector'],
+            "현재가": f"{stock_data['price']:,.0f}원",
+            "시가총액": f"{stock_data['market_cap']/100000000:.0f}억원",
+            "거래량": f"{stock_data['trading_volume']:,.0f}주",
+            "30일 수익률": f"{total_return_30d:.2%}" if len(returns_30d) > 0 else "N/A",
+            "변동성 (연환산)": f"{np.std(stock_data['historical_returns']) * np.sqrt(252):.2%}" if len(stock_data['historical_returns']) > 0 else "N/A"
+        }
+
+        return [types.TextContent(
+            type="text",
+            text=json.dumps(result, ensure_ascii=False, indent=2)
+        )]
+
+    except Exception as e:
+        return [types.TextContent(
+            type="text",
+            text=f"종목 조회 실패: {str(e)}\n\n"
+                 f"입력 예시: '삼성전자' 또는 '005930'"
+        )]
 
 
 async def main():
