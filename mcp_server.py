@@ -172,21 +172,22 @@ async def handle_list_tools() -> list[types.Tool]:
         # 외국인 선호 종목
         types.Tool(
             name="find_foreign_favorites",
-            description="외국인이 최근 집중 매수하고 있는 종목을 찾습니다. 여러 종목을 분석하여 상위 종목을 추천합니다.",
+            description="대형주 15개 종목(또는 KOSPI 시가총액 상위 100개)을 분석하여 외국인/기관이 집중 매수하는 종목을 찾습니다. run_portfolio.py와 동일한 로직으로 거래량, 외국인/기관 순매수를 종합 분석합니다.",
             inputSchema={
                 "type": "object",
                 "properties": {
-                    "tickers": {
-                        "type": "string",
-                        "description": "분석할 종목 목록 (예: '삼성전자, SK하이닉스, NAVER, 카카오')"
-                    },
                     "top_n": {
                         "type": "integer",
-                        "description": "상위 몇 개 종목을 추천할지",
-                        "default": 3
+                        "description": "상위 몇 개 종목을 추천할지 (기본값: 5)",
+                        "default": 5
+                    },
+                    "use_all_kospi": {
+                        "type": "boolean",
+                        "description": "true면 KOSPI 시가총액 상위 100개, false면 대형주 15개 분석 (기본값: false)",
+                        "default": false
                     }
                 },
-                "required": ["tickers"]
+                "required": []
             }
         ),
 
@@ -957,129 +958,377 @@ async def get_investor_flow(args: dict) -> list[types.TextContent]:
 
 
 async def find_foreign_favorites(args: dict) -> list[types.TextContent]:
-    """외국인 선호 종목 찾기"""
-    tickers_text = args["tickers"]
-    top_n = args.get("top_n", 3)
+    """외국인 선호 종목 찾기 - run_portfolio.py와 동일한 로직"""
+    top_n = args.get("top_n", 5)
+    use_all_kospi = args.get("use_all_kospi", False)
 
     try:
-        # 종목 코드 파싱
-        tickers = [t.strip() for t in tickers_text.replace(',', ' ').split() if t.strip()]
+        from pykrx import stock
+        from datetime import datetime
 
-        ticker_map = {
-            '삼성전자': '005930',
-            'SK하이닉스': '000660',
-            'NAVER': '035420',
-            '카카오': '035720',
-        }
+        today = datetime.now().strftime("%Y%m%d")
 
-        # 종목명을 코드로 변환
-        converted_tickers = []
-        for ticker in tickers:
-            if not ticker.isdigit():
-                ticker = ticker_map.get(ticker, ticker)
-            converted_tickers.append(ticker)
+        # 후보 종목 선정
+        if use_all_kospi:
+            # KOSPI 시가총액 상위 100개
+            market_cap_df = stock.get_market_cap(date=today, market="KOSPI")
+            market_cap_df = market_cap_df.sort_values('시가총액', ascending=False)
+            candidate_tickers = market_cap_df.head(100).index.tolist()
+        else:
+            # 대형주 15개 (run_portfolio.py와 동일)
+            candidate_tickers = [
+                "005930",  # 삼성전자
+                "000660",  # SK하이닉스
+                "035420",  # NAVER
+                "035720",  # 카카오
+                "207940",  # 삼성바이오
+                "005380",  # 현대차
+                "000270",  # 기아
+                "051910",  # LG화학
+                "006400",  # 삼성SDI
+                "068270",  # 셀트리온
+                "105560",  # KB금융
+                "055550",  # 신한지주
+                "096770",  # SK이노베이션
+                "012330",  # 현대모비스
+                "028260",  # 삼성물산
+            ]
 
-        result = {
-            "분석종목수": len(converted_tickers),
-            "상위추천수": top_n,
-            "설명": "외국인 선호 종목 분석은 실시간 외국인 매매 데이터가 필요합니다.",
-            "추천로직": [
-                "최근 20일간 외국인 순매수 강도 계산",
-                "기관 매매와의 컨센서스 확인",
-                "프로그램 매매 신호 반영"
-            ],
-            "필요데이터": "pykrx를 통한 실시간 투자자별 매매 동향 데이터"
-        }
+        stocks_data = []
 
-        return [types.TextContent(
-            type="text",
-            text=json.dumps(result, ensure_ascii=False, indent=2)
-        )]
+        # 각 종목 분석
+        for ticker in candidate_tickers:
+            try:
+                # 현재가 및 거래량
+                ohlcv = stock.get_market_ohlcv_by_date(today, today, ticker)
+                if ohlcv.empty:
+                    continue
+
+                price = int(ohlcv['종가'].iloc[-1])
+                volume = int(ohlcv['거래량'].iloc[-1])
+
+                # 투자자별 매매 동향
+                investor_df = stock.get_market_trading_value_by_date(today, today, ticker)
+                if investor_df.empty:
+                    continue
+
+                # 외국인, 기관, 개인 순매수
+                foreign_net = int(investor_df['외국인'].iloc[-1]) if '외국인' in investor_df.columns else 0
+                institution_net = int(investor_df['기관'].iloc[-1]) if '기관' in investor_df.columns else 0
+
+                # 종목명
+                name = stock.get_market_ticker_name(ticker)
+
+                # 종합 점수 계산 (run_portfolio.py와 동일)
+                volume_score = volume / 1000000
+                foreign_score = foreign_net / 100000 if volume > 0 else 0
+                institution_score = institution_net / 100000 if volume > 0 else 0
+
+                # 거래량 30% + 외국인 40% + 기관 30%
+                score = (volume_score * 0.3 + foreign_score * 0.4 + institution_score * 0.3)
+
+                stocks_data.append({
+                    'ticker': ticker,
+                    'name': name,
+                    'price': price,
+                    'volume': volume,
+                    'foreign_net': foreign_net,
+                    'institution_net': institution_net,
+                    'score': score
+                })
+
+            except Exception as e:
+                # 개별 종목 오류는 무시
+                continue
+
+        # 점수 기준 정렬
+        stocks_data.sort(key=lambda x: x['score'], reverse=True)
+
+        # 상위 N개 선정
+        top_stocks = stocks_data[:top_n]
+
+        # 결과 포맷팅
+        result_text = f"📊 외국인 선호 종목 분석 (상위 {top_n}개)\n"
+        result_text += f"분석 대상: {len(stocks_data)}개 종목\n"
+        result_text += f"분석 기준: 거래량(30%) + 외국인(40%) + 기관(30%)\n\n"
+
+        for i, stock_info in enumerate(top_stocks, 1):
+            foreign_icon = "📈" if stock_info['foreign_net'] > 0 else "📉" if stock_info['foreign_net'] < 0 else "➖"
+            institution_icon = "📈" if stock_info['institution_net'] > 0 else "📉" if stock_info['institution_net'] < 0 else "➖"
+
+            result_text += f"\n{i}위. {stock_info['name']} ({stock_info['ticker']})\n"
+            result_text += f"  현재가: {stock_info['price']:,}원\n"
+            result_text += f"  거래량: {stock_info['volume']:,}주\n"
+            result_text += f"  외국인: {foreign_icon} {abs(stock_info['foreign_net']):,}원\n"
+            result_text += f"  기관: {institution_icon} {abs(stock_info['institution_net']):,}원\n"
+            result_text += f"  종합점수: {stock_info['score']:.2f}\n"
+
+        return [types.TextContent(type="text", text=result_text)]
 
     except Exception as e:
-        return [types.TextContent(type="text", text=f"분석 실패: {str(e)}")]
+        return [types.TextContent(type="text", text=f"분석 실패: {str(e)}\n\n추천: run_portfolio.py 스크립트를 직접 실행해보세요.")]
 
 
 async def get_trading_signals(args: dict) -> list[types.TextContent]:
-    """매매 전략 신호 생성"""
+    """매매 전략 신호 생성 - 실제 데이터 기반 분석"""
     ticker = args["ticker"]
-    strategies = args.get("strategies", ["foreign_follow", "momentum"])
+    days = args.get("days", 20)
 
     try:
+        from pykrx import stock
+        from datetime import datetime, timedelta
+        import pandas as pd
+
         # 종목명 변환
+        ticker_map = {
+            '삼성전자': '005930', 'SK하이닉스': '000660', 'NAVER': '035420',
+            '카카오': '035720', '현대차': '005380', '기아': '000270',
+            'LG화학': '051910', '삼성SDI': '006400', '셀트리온': '068270',
+        }
         if not ticker.isdigit():
-            ticker_map = {
-                '삼성전자': '005930',
-                'SK하이닉스': '000660',
-                'NAVER': '035420',
-                '카카오': '035720',
-            }
             ticker = ticker_map.get(ticker, ticker)
 
-        result = {
-            "종목코드": ticker,
-            "적용전략": strategies,
-            "설명": "다중 전략 매매 신호 생성",
-            "전략설명": {
-                "foreign_follow": "외국인+기관 순매수 추종 전략",
-                "momentum": "가격 모멘텀 및 기술적 지표 전략",
-                "mean_reversion": "볼린저 밴드 기반 평균회귀 전략"
-            },
-            "필요데이터": [
-                "투자자별 매매 동향 (pykrx)",
-                "가격 및 거래량 데이터",
-                "기술적 지표 (RSI, MACD, 볼린저밴드)"
-            ]
-        }
+        # 날짜 설정
+        end_date = datetime.now()
+        start_date = end_date - timedelta(days=days+30)  # 여유있게
+        end_str = end_date.strftime("%Y%m%d")
+        start_str = start_date.strftime("%Y%m%d")
 
-        return [types.TextContent(
-            type="text",
-            text=json.dumps(result, ensure_ascii=False, indent=2)
-        )]
+        # 종목명
+        name = stock.get_market_ticker_name(ticker)
+
+        # 1. 가격 및 거래량 데이터
+        ohlcv = stock.get_market_ohlcv_by_date(start_str, end_str, ticker)
+        if ohlcv.empty:
+            return [types.TextContent(type="text", text=f"데이터 조회 실패: {ticker}")]
+
+        # 2. 투자자별 매매 동향
+        investor_df = stock.get_market_trading_value_by_date(start_str, end_str, ticker)
+
+        # === 전략 1: 외국인 추종 ===
+        foreign_signal = "HOLD"
+        foreign_reason = ""
+        if not investor_df.empty and '외국인' in investor_df.columns and '기관' in investor_df.columns:
+            recent_foreign = investor_df['외국인'].tail(5).sum()
+            recent_institution = investor_df['기관'].tail(5).sum()
+
+            if recent_foreign > 0 and recent_institution > 0:
+                foreign_signal = "BUY"
+                foreign_reason = f"외국인+기관 동시 매수 (외국인: {recent_foreign/1e8:.1f}억, 기관: {recent_institution/1e8:.1f}억)"
+            elif recent_foreign < 0 and recent_institution < 0:
+                foreign_signal = "SELL"
+                foreign_reason = f"외국인+기관 동시 매도 (외국인: {recent_foreign/1e8:.1f}억, 기관: {recent_institution/1e8:.1f}억)"
+            else:
+                foreign_signal = "HOLD"
+                foreign_reason = "외국인/기관 방향 불일치"
+
+        # === 전략 2: 모멘텀 (이동평균) ===
+        momentum_signal = "HOLD"
+        momentum_reason = ""
+
+        ohlcv['MA5'] = ohlcv['종가'].rolling(5).mean()
+        ohlcv['MA20'] = ohlcv['종가'].rolling(20).mean()
+        ohlcv['MA60'] = ohlcv['종가'].rolling(60).mean()
+
+        latest = ohlcv.iloc[-1]
+        price = latest['종가']
+        ma5 = latest['MA5']
+        ma20 = latest['MA20']
+        ma60 = latest['MA60']
+
+        if pd.notna(ma5) and pd.notna(ma20) and pd.notna(ma60):
+            if ma5 > ma20 > ma60 and price > ma5:
+                momentum_signal = "BUY"
+                momentum_reason = f"정배열 상승 추세 (현재가: {price:,.0f}, MA5: {ma5:,.0f}, MA20: {ma20:,.0f})"
+            elif ma5 < ma20 < ma60 and price < ma5:
+                momentum_signal = "SELL"
+                momentum_reason = f"역배열 하락 추세 (현재가: {price:,.0f}, MA5: {ma5:,.0f}, MA20: {ma20:,.0f})"
+            else:
+                momentum_signal = "HOLD"
+                momentum_reason = "추세 불명확"
+
+        # === 전략 3: 거래량 급증 ===
+        volume_signal = "HOLD"
+        volume_reason = ""
+
+        recent_volume = ohlcv['거래량'].tail(5).mean()
+        avg_volume = ohlcv['거래량'].tail(20).mean()
+
+        if recent_volume > avg_volume * 1.5:
+            volume_signal = "BUY"
+            volume_reason = f"거래량 급증 ({recent_volume/avg_volume:.1f}배)"
+        elif recent_volume < avg_volume * 0.5:
+            volume_signal = "SELL"
+            volume_reason = f"거래량 감소 ({recent_volume/avg_volume:.1f}배)"
+        else:
+            volume_reason = "거래량 정상"
+
+        # === 종합 판단 ===
+        buy_count = [foreign_signal, momentum_signal, volume_signal].count("BUY")
+        sell_count = [foreign_signal, momentum_signal, volume_signal].count("SELL")
+
+        if buy_count >= 2:
+            final_signal = "🟢 매수"
+        elif sell_count >= 2:
+            final_signal = "🔴 매도"
+        else:
+            final_signal = "🟡 관망"
+
+        # 결과 포맷팅
+        result_text = f"📊 {name} ({ticker}) 매매 신호 분석\n\n"
+        result_text += f"종합 판단: {final_signal}\n"
+        result_text += f"현재가: {price:,.0f}원\n\n"
+        result_text += "=" * 60 + "\n"
+        result_text += f"[1] 외국인 추종 전략: {foreign_signal}\n"
+        result_text += f"    {foreign_reason}\n\n"
+        result_text += f"[2] 모멘텀 전략: {momentum_signal}\n"
+        result_text += f"    {momentum_reason}\n\n"
+        result_text += f"[3] 거래량 분석: {volume_signal}\n"
+        result_text += f"    {volume_reason}\n"
+        result_text += "=" * 60 + "\n"
+
+        return [types.TextContent(type="text", text=result_text)]
 
     except Exception as e:
-        return [types.TextContent(type="text", text=f"신호 생성 실패: {str(e)}")]
+        import traceback
+        return [types.TextContent(type="text", text=f"신호 생성 실패: {str(e)}\n\n{traceback.format_exc()}")]
 
 
 async def analyze_short_squeeze(args: dict) -> list[types.TextContent]:
-    """숏 스퀴즈 가능성 분석"""
+    """숏 스퀴즈 가능성 분석 - 실제 공매도 데이터 기반"""
     ticker = args["ticker"]
+    days = args.get("days", 5)
 
     try:
+        from pykrx import stock
+        from datetime import datetime, timedelta
+
         # 종목명 변환
+        ticker_map = {
+            '삼성전자': '005930', 'SK하이닉스': '000660', 'NAVER': '035420',
+            '카카오': '035720', '현대차': '005380', '기아': '000270',
+            'LG화학': '051910', '삼성SDI': '006400', '셀트리온': '068270',
+        }
         if not ticker.isdigit():
-            ticker_map = {
-                '삼성전자': '005930',
-                'SK하이닉스': '000660',
-                'NAVER': '035420',
-                '카카오': '035720',
-            }
             ticker = ticker_map.get(ticker, ticker)
 
-        result = {
-            "종목코드": ticker,
-            "분석항목": [
-                "공매도 비율 (전체 거래량 대비)",
-                "외국인 + 기관 순매수 강도",
-                "프로그램 매수 급증 여부",
-                "거래량 급증 패턴"
-            ],
-            "숏스퀴즈 조건": {
-                "공매도비율": "10% 이상",
-                "외국인기관": "동시 순매수 전환",
-                "거래량": "평균 대비 2배 이상 증가"
-            },
-            "데이터소스": "pykrx를 통한 공매도 데이터 및 투자자별 매매 동향",
-            "참고": "실제 숏 스퀴즈 분석을 위해서는 실시간 공매도 데이터가 필요합니다."
-        }
+        # 날짜 설정
+        end_date = datetime.now()
+        start_date = end_date - timedelta(days=days+10)
+        end_str = end_date.strftime("%Y%m%d")
+        start_str = start_date.strftime("%Y%m%d")
+        today = end_date.strftime("%Y%m%d")
 
-        return [types.TextContent(
-            type="text",
-            text=json.dumps(result, ensure_ascii=False, indent=2)
-        )]
+        # 종목명
+        name = stock.get_market_ticker_name(ticker)
+
+        # 1. 공매도 잔고 비율
+        try:
+            short_df = stock.get_shorting_status_by_date(start_str, end_str, ticker)
+            if not short_df.empty:
+                latest_short = short_df.iloc[-1]
+                short_balance = int(latest_short['잔고'])  # 공매도 잔고
+                short_volume = int(latest_short['거래량'])  # 공매도 거래량
+            else:
+                short_balance = 0
+                short_volume = 0
+        except:
+            short_balance = 0
+            short_volume = 0
+
+        # 2. 투자자별 매매 동향
+        investor_df = stock.get_market_trading_value_by_date(start_str, end_str, ticker)
+        foreign_net = 0
+        institution_net = 0
+
+        if not investor_df.empty and '외국인' in investor_df.columns and '기관' in investor_df.columns:
+            foreign_net = int(investor_df['외국인'].tail(days).sum())
+            institution_net = int(investor_df['기관'].tail(days).sum())
+
+        # 3. 거래량 및 가격
+        ohlcv = stock.get_market_ohlcv_by_date(start_str, end_str, ticker)
+        total_volume = 0
+        avg_volume = 0
+        price = 0
+
+        if not ohlcv.empty:
+            price = int(ohlcv['종가'].iloc[-1])
+            total_volume = int(ohlcv['거래량'].iloc[-1])
+            avg_volume = int(ohlcv['거래량'].tail(10).mean())
+
+        # === 숏 스퀴즈 가능성 판단 ===
+        squeeze_score = 0
+        reasons = []
+
+        # 조건 1: 공매도 잔고 비율이 높은가?
+        if short_balance > 0 and total_volume > 0:
+            short_ratio = (short_balance / total_volume) * 100
+            if short_ratio > 20:
+                squeeze_score += 40
+                reasons.append(f"⚠️ 높은 공매도 비율 ({short_ratio:.1f}%)")
+            elif short_ratio > 10:
+                squeeze_score += 20
+                reasons.append(f"⚡ 공매도 비율 주의 ({short_ratio:.1f}%)")
+
+        # 조건 2: 외국인+기관이 동시 매수 중인가?
+        if foreign_net > 0 and institution_net > 0:
+            squeeze_score += 30
+            reasons.append(f"📈 외국인+기관 동시 매수 (외국인: {foreign_net/1e8:.1f}억, 기관: {institution_net/1e8:.1f}억)")
+        elif foreign_net > 0:
+            squeeze_score += 15
+            reasons.append(f"📈 외국인 순매수 ({foreign_net/1e8:.1f}억)")
+
+        # 조건 3: 거래량 급증?
+        if total_volume > avg_volume * 1.5:
+            squeeze_score += 20
+            reasons.append(f"🔥 거래량 급증 ({total_volume/avg_volume:.1f}배)")
+
+        # 조건 4: 공매도 잔고가 큰가?
+        if short_balance > avg_volume * 5:
+            squeeze_score += 10
+            reasons.append(f"💣 높은 공매도 잔고 (평균 거래량의 {short_balance/avg_volume:.1f}배)")
+
+        # === 최종 판단 ===
+        if squeeze_score >= 70:
+            risk_level = "🔴 매우 높음"
+            recommendation = "강한 숏 스퀴즈 가능성. 공매도 청산 압력 예상."
+        elif squeeze_score >= 50:
+            risk_level = "🟠 높음"
+            recommendation = "숏 스퀴즈 가능성 있음. 주의 깊게 관찰 필요."
+        elif squeeze_score >= 30:
+            risk_level = "🟡 보통"
+            recommendation = "일부 조건 충족. 추가 모니터링 권장."
+        else:
+            risk_level = "🟢 낮음"
+            recommendation = "현재 숏 스퀴즈 가능성 낮음."
+
+        # 결과 포맷팅
+        result_text = f"💥 {name} ({ticker}) 숏 스퀴즈 분석\n\n"
+        result_text += f"위험도: {risk_level} (점수: {squeeze_score}/100)\n"
+        result_text += f"판단: {recommendation}\n\n"
+        result_text += "=" * 60 + "\n"
+        result_text += f"현재가: {price:,}원\n"
+        result_text += f"공매도 잔고: {short_balance:,}주\n"
+        result_text += f"평균 거래량: {avg_volume:,}주\n"
+        result_text += f"최근 {days}일 외국인: {foreign_net/1e8:+.1f}억원\n"
+        result_text += f"최근 {days}일 기관: {institution_net/1e8:+.1f}억원\n\n"
+
+        if reasons:
+            result_text += "[분석 포인트]\n"
+            for reason in reasons:
+                result_text += f"  • {reason}\n"
+        else:
+            result_text += "[분석 포인트]\n"
+            result_text += "  • 특이사항 없음\n"
+
+        result_text += "=" * 60 + "\n"
+        result_text += "\n참고: 공매도 데이터는 KRX 공개 데이터 기준이며, 실시간 반영되지 않을 수 있습니다."
+
+        return [types.TextContent(type="text", text=result_text)]
 
     except Exception as e:
-        return [types.TextContent(type="text", text=f"분석 실패: {str(e)}")]
+        import traceback
+        return [types.TextContent(type="text", text=f"분석 실패: {str(e)}\n\n{traceback.format_exc()}")]
 
 
 async def main():
